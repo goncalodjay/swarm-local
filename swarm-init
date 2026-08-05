@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: swarm-init [--languages "Go, Python"] [project-directory]
+
+Installs the local SwarmForge template into a project. No network request,
+git clone, package installation, or update check is performed.
+EOF
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATE_DIR="$SCRIPT_DIR/template"
+LANGUAGES=""
+TARGET=""
+
+while (($#)); do
+  case "$1" in
+    --languages|-l)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
+      LANGUAGES="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      [[ -z "$TARGET" ]] || { echo "Only one project directory is allowed." >&2; exit 2; }
+      TARGET="$1"
+      shift
+      ;;
+  esac
+done
+
+TARGET="${TARGET:-$PWD}"
+TARGET="$(cd "$TARGET" && pwd)"
+
+if [[ -z "$LANGUAGES" ]]; then
+  read -r -p "¿Qué lenguajes se utilizarán en este proyecto? (ej.: Go, Python): " LANGUAGES
+fi
+LANGUAGES="$(printf '%s' "$LANGUAGES" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+[[ -n "$LANGUAGES" ]] || { echo "Debes indicar al menos un lenguaje." >&2; exit 2; }
+
+for path in swarm swarmforge; do
+  if [[ -e "$TARGET/$path" ]]; then
+    echo "No se instaló: $TARGET/$path ya existe." >&2
+    echo "No se sobrescriben configuraciones existentes." >&2
+    exit 1
+  fi
+done
+
+cp -R "$TEMPLATE_DIR/swarmforge" "$TARGET/swarmforge"
+install -m 0755 "$TEMPLATE_DIR/swarm" "$TARGET/swarm"
+
+LANGUAGES="$LANGUAGES" python3 - "$TARGET/swarmforge" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+placeholder = "{{LANGUAGES}}"
+replacements = 0
+for path in root.rglob("*"):
+    if not path.is_file():
+        continue
+    text = path.read_text()
+    count = text.count(placeholder)
+    if count:
+        path.write_text(text.replace(placeholder, os.environ["LANGUAGES"]))
+        replacements += count
+if replacements == 0:
+    raise SystemExit(f"No {placeholder} placeholder found below {root}")
+PY
+
+ignore_file="$TARGET/.gitignore"
+touch "$ignore_file"
+for entry in .swarmforge/ .worktrees/; do
+  grep -Fqx "$entry" "$ignore_file" || printf '%s\n' "$entry" >> "$ignore_file"
+done
+
+printf '\nSwarmForge local instalado en %s\n' "$TARGET"
+printf 'Lenguajes configurados: %s\n' "$LANGUAGES"
+printf 'Inicia con: cd %q && ./swarm\n' "$TARGET"
