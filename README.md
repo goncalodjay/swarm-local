@@ -47,6 +47,8 @@ Los argumentos posteriores al worktree (`--model`, `--agent`, `--auto`, etc.) se
 
 `swarm-init` pregunta para `specifier`, `coder`, `refactorer` y `architect`, en este orden: backend (`claude`, `codex`, `copilot`, `grok`, `opencode` o `pi`), modelo y nivel de thinking/effort. Los cuatro roles pueden usar backends distintos.
 
+Al elegir OpenCode, aparece un menú de modelos legible (por ejemplo, `OpenCode Go — Kimi K3`); el inicializador guarda internamente su identificador canónico sin espacios (`opencode-go/kimi-k3`). El catálogo local está en `opencode-models.tsv`; se actualiza deliberadamente en `swarm-local`, no mediante una descarga durante la inicialización.
+
 El inicializador aplica el nivel al argumento compatible: `pi` usa `--thinking`, Claude usa `--effort` y Codex usa `-c model_reasoning_effort=...`. OpenCode, Copilot y Grok reciben el modelo; sus opciones de razonamiento dependen de su configuración/proveedor y puedes añadir sus flags específicos manualmente a `swarmforge.conf`.
 
 `template/` es la fuente de verdad de las configuraciones compartidas. Los cambios de un proyecto ya inicializado no modifican esta plantilla.

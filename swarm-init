@@ -18,6 +18,7 @@ while [[ -L "$SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/template"
+OPENCODE_MODELS_FILE="$SCRIPT_DIR/opencode-models.tsv"
 LANGUAGES=""
 TARGET=""
 ROLES=(specifier coder refactorer architect)
@@ -70,7 +71,7 @@ choose_agent() {
   done
 }
 
-choose_single_value() {
+choose_model_identifier() {
   local label="$1" value
   while :; do
     read -r -p "$label: " value
@@ -79,16 +80,51 @@ choose_single_value() {
       printf '%s' "$value"
       return
     fi
-    echo "Indica un valor no vacío y sin espacios." >&2
+    echo "Indica un identificador de modelo no vacío y sin espacios." >&2
   done
+}
+
+choose_opencode_model() {
+  local role="$1" selection index=1 id label
+  local -a ids=()
+  local -a labels=()
+  [[ -r "$OPENCODE_MODELS_FILE" ]] || { echo "No se encontró el catálogo local de modelos OpenCode." >&2; exit 1; }
+  while IFS=$'\t' read -r id label; do
+    [[ -n "$id" && -n "$label" ]] || continue
+    ids+=("$id")
+    labels+=("$label")
+  done < "$OPENCODE_MODELS_FILE"
+  ((${#ids[@]} > 0)) || { echo "El catálogo local de modelos OpenCode está vacío." >&2; exit 1; }
+
+  echo "Modelos OpenCode disponibles para ${role}:" >&2
+  for index in "${!ids[@]}"; do
+    printf '  %d) %s\n' "$((index + 1))" "${labels[$index]}" >&2
+  done
+  while :; do
+    read -r -p "Selecciona el modelo OpenCode para ${role} [1-${#ids[@]}]: " selection
+    if [[ "$selection" =~ ^[0-9]+$ ]] && ((selection >= 1 && selection <= ${#ids[@]})); then
+      printf '%s' "${ids[$((selection - 1))]}"
+      return
+    fi
+    echo "Selecciona un número entre 1 y ${#ids[@]}." >&2
+  done
+}
+
+choose_model() {
+  local agent="$1" role="$2"
+  if [[ "$agent" == "opencode" ]]; then
+    choose_opencode_model "$role"
+  else
+    choose_model_identifier "Modelo para ${role}"
+  fi
 }
 
 printf '\nConfigura el backend de cada sesión. Modelo y nivel se guardan en swarmforge/swarmforge.conf.\n'
 for index in "${!ROLES[@]}"; do
   role="${ROLES[$index]}"
   ROLE_AGENTS[$role]="$(choose_agent "$role")"
-  ROLE_MODELS[$role]="$(choose_single_value "Modelo para ${role}")"
-  ROLE_THINKING[$role]="$(choose_single_value "Thinking/effort para ${role} (off|minimal|low|medium|high|xhigh|max)")"
+  ROLE_MODELS[$role]="$(choose_model "${ROLE_AGENTS[$role]}" "$role")"
+  ROLE_THINKING[$role]="$(choose_model_identifier "Thinking/effort para ${role} (off|minimal|low|medium|high|xhigh|max)")"
 done
 
 for path in swarm swarmforge; do
