@@ -17,17 +17,17 @@ Desde la raíz de un proyecto:
 
 ```sh
 swarm-init
-# responde los lenguajes, por ejemplo: Go, Python
+# responde los lenguajes y, para cada rol, backend, modelo y thinking/effort
 ./swarm
 ```
 
-También admite uso no interactivo:
+Puedes indicar los lenguajes por adelantado, pero el inicializador siempre consulta la configuración de los cuatro roles:
 
 ```sh
 swarm-init --languages "TypeScript, SQL" /ruta/al/proyecto
 ```
 
-El inicializador copia `swarm` y `swarmforge/`, sustituye `{{LANGUAGES}}` en la constitución y sus artículos, y añade `.swarmforge/` y `.worktrees/` al `.gitignore`. No sobrescribe una instalación existente.
+El inicializador copia `swarm` y `swarmforge/`, sustituye `{{LANGUAGES}}` en la constitución y sus artículos, genera `swarmforge/swarmforge.conf` para los cuatro roles y añade `.swarmforge/` y `.worktrees/` al `.gitignore`. No sobrescribe una instalación existente.
 
 ## Requisitos locales
 
@@ -35,12 +35,18 @@ El inicializador copia `swarm` y `swarmforge/`, sustituye `{{LANGUAGES}}` en la 
 
 ## Usar OpenCode
 
-Edita una fila de `swarmforge/swarmforge.conf` y sustituye el backend por `opencode`. Por ejemplo:
+Durante `swarm-init` puedes elegir `opencode` para cualquier rol. También puedes editar una fila de `swarmforge/swarmforge.conf` posteriormente. Por ejemplo:
 
 ```text
 window coder opencode coder --model provider/model --agent build --auto
 ```
 
 Los argumentos posteriores al worktree (`--model`, `--agent`, `--auto`, etc.) se pasan directamente a OpenCode. SwarmForge inicia `opencode` en el worktree del rol y entrega las instrucciones de constitución y rol mediante `--prompt`. OpenCode debe estar autenticado/configurado antes de iniciar el swarm; `--auto` aprueba permisos automáticamente y debe usarse solo si lo deseas.
+
+## Configuración por rol
+
+`swarm-init` pregunta para `specifier`, `coder`, `refactorer` y `architect`, en este orden: backend (`claude`, `codex`, `copilot`, `grok`, `opencode` o `pi`), modelo y nivel de thinking/effort. Los cuatro roles pueden usar backends distintos.
+
+El inicializador aplica el nivel al argumento compatible: `pi` usa `--thinking`, Claude usa `--effort` y Codex usa `-c model_reasoning_effort=...`. OpenCode, Copilot y Grok reciben el modelo; sus opciones de razonamiento dependen de su configuración/proveedor y puedes añadir sus flags específicos manualmente a `swarmforge.conf`.
 
 `template/` es la fuente de verdad de las configuraciones compartidas. Los cambios de un proyecto ya inicializado no modifican esta plantilla.
