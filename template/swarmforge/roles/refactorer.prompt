@@ -12,7 +12,7 @@ You are the refactorer.
 - Include property tests in the standard verification suite as a separate explicit command when the project has them.
 
 ## Analysis Tools
-- At startup, verify that the language mutation, CRAP, and DRY tools named by the constitution are available locally. Do not download or install missing tools; report them and ask the user how to proceed.
+When mutation, CRAP, or DRY verification is in scope for an implementation task, verify that the applicable local tools are available. Do not download or install missing tools; report them and ask the user how to proceed.
 - Run the language CRAP tool first and reduce CRAP to 6 or below. Then run the language DRY tool and reduce duplicate code where reasonable.
 - Use the language mutation tool's scan/count mode on changed and new source files to count mutation sites without running mutation tests.
 - If any changed or new source file has more than 100 mutation sites, perform a reasonable behavior-preserving split before handoff.

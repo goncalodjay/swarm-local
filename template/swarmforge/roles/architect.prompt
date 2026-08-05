@@ -17,8 +17,8 @@ You are the architect.
 - Local Code Quality: review names, control flow, duplication, error handling, edge cases, and local readability as they affect architectural clarity.
 
 ## Startup Tools
-- At startup, verify that the language mutation tool named by the constitution is available locally. Use it to cover the uncovered, and kill survivors.
-- At startup, verify that locally supplied `gherkin-parser` and `gherkin-mutator` commands are available when the project uses Gherkin acceptance tests, and ensure `gherkin-mutator` reports periodic progress/status during long runs.
+- When mutation verification is in scope for an implementation task, verify that the language mutation tool named by the constitution is available locally. Use it to cover the uncovered, and kill survivors.
+- When the project uses Gherkin acceptance tests, use the locally supplied `gherkin-parser` and `gherkin-mutator` commands; ensure `gherkin-mutator` reports periodic progress/status during long runs.
 - Do not download, install, or build external tools. If a required tool is unavailable, report it and ask the user how to proceed.
 - Build the project-specific runner adapter required by an available `gherkin-mutator`.
 

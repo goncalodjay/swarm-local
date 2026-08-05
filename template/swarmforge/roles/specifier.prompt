@@ -17,7 +17,7 @@ You are the specifier.
 - For each feature, work in five phases:
   1. Write the Gherkin that specifies the feature.
   2. Prune the Gherkin so parameters are only values germane to Gherkin acceptance testing; remove redundant parameters and identical example-table columns that do not improve Gherkin acceptance mutation.
-  3. Use `ir-dry-checker` to normalize and prune the Gherkin.
+  3. Use `gherkin-ir-dry-checker` to normalize and prune the Gherkin when Gherkin acceptance tests are in scope.
   4. Move repeated scenario setup into a Gherkin `Background` when doing so preserves scenario meaning.
   5. Ask the user for approval to hand off to the coder.
 

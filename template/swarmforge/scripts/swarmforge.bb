@@ -280,6 +280,9 @@
             (fs/copy-tree entry target {:replace-existing true})
             (fs/copy entry target {:replace-existing true}))))
       (fs/create-dirs (fs/path role-state-dir "notify"))
+      (fs/copy-tree (fs/path (:state-dir ctx) "toolchain")
+                    (fs/path role-state-dir "toolchain")
+                    {:replace-existing true})
       (fs/copy (:sessions-file ctx) (fs/path role-state-dir "sessions.tsv") {:replace-existing true})
       (fs/copy (:roles-file ctx) (fs/path role-state-dir "roles.tsv") {:replace-existing true})
       (fs/copy (:tmux-socket-file ctx) (fs/path role-state-dir "tmux-socket") {:replace-existing true})
@@ -325,12 +328,13 @@
         agent (:agent row)
         display (:display-name row)
         role-worktree (:worktree-path row)
+        role-tool-bin (fs/path role-worktree ".swarmforge" "toolchain" "bin")
         role-script-dir (if (= (str role-worktree) (str (:working-dir ctx)))
                           (:script-dir ctx)
                           (fs/path role-worktree "swarmforge" "scripts"))
         prompt-file (fs/path (:prompts-dir ctx) (str role ".md"))
         base (str "export SWARMFORGE_ROLE=" (sq role)
-                  " && export PATH=" (sq (str role-script-dir)) ":$PATH"
+                  " && export PATH=" (sq (str role-script-dir)) ":" (sq (str role-tool-bin)) ":$PATH"
                   " && cd " (sq (str role-worktree))
                   " && ")]
     (write-agent-instruction-file! role prompt-file)

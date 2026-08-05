@@ -64,6 +64,8 @@ done
 
 cp -R "$TEMPLATE_DIR/swarmforge" "$TARGET/swarmforge"
 install -m 0755 "$TEMPLATE_DIR/swarm" "$TARGET/swarm"
+mkdir -p "$TARGET/.swarmforge"
+cp -R "$TEMPLATE_DIR/toolchain" "$TARGET/.swarmforge/toolchain"
 
 LANGUAGES="$LANGUAGES" python3 - "$TARGET/swarmforge" <<'PY'
 import os

@@ -31,6 +31,6 @@ El inicializador copia `swarm` y `swarmforge/`, sustituye `{{LANGUAGES}}` en la 
 
 ## Requisitos locales
 
-`./swarm` requiere `bb`, `tmux`, `git` y `pi`. Las instrucciones de los roles prohíben descargar herramientas: si el proyecto requiere una herramienta de lenguaje o aceptación, debe estar ya disponible localmente o el agente pedirá indicaciones.
+`./swarm` requiere `bb`, `tmux`, `git` y `pi`. La plantilla incluye localmente `gherkin-parser`, `gherkin-ir-dry-checker` y `gherkin-mutator`; `swarm-init` los instala bajo `.swarmforge/toolchain/bin` y los añade al `PATH` de cada agente. Las herramientas de mutación, CRAP y DRY específicas de cada lenguaje siguen siendo una decisión del proyecto: los agentes no las descargarán y pedirán indicaciones si una tarea las requiere.
 
 `template/` es la fuente de verdad de las configuraciones compartidas. Los cambios de un proyecto ya inicializado no modifican esta plantilla.
