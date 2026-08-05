@@ -153,7 +153,10 @@ EOF
     thinking="${ROLE_THINKING[$role]}"
     extra="--model $model"
     case "$agent" in
-      pi) extra="--provider openai-codex $extra --thinking $thinking" ;;
+      pi)
+        [[ "$model" == */* ]] || model="openai-codex/$model"
+        extra="--model $model --thinking $thinking"
+        ;;
       claude) extra="$extra --effort $thinking" ;;
       codex) extra="$extra -c model_reasoning_effort=$thinking" ;;
       opencode|copilot|grok) ;;
