@@ -1,7 +1,7 @@
 # Project Rules
 
 ## Project Shape
-- This project is configured for SwarmForge with four Pi-backed agents: specifier, coder, refactorer, and architect.
+- This project is configured for SwarmForge with four AI-backed agents: specifier, coder, refactorer, and architect. Their CLI backends are configured in `swarmforge/swarmforge.conf`.
 - Project languages: {{LANGUAGES}}.
 - Before changing code, inspect the repository to identify its build, test, formatting, and dependency commands. Use tools already available in the project or on the local machine.
 
