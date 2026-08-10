@@ -1,0 +1,6 @@
+{
+  "name": "swarm-tui",
+  "private": true,
+  "type": "module",
+  "description": "SwarmForge terminal dashboard. Zero runtime dependencies; runs on Node native TypeScript type stripping."
+}

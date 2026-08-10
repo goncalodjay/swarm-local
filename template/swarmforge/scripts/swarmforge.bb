@@ -588,6 +588,13 @@
 (defn test-sleep-inhibitor-prefix! []
   (println (str/join " " (or (sleep-inhibitor-prefix) []))))
 
+(defn run-tui! [root]
+  (let [tui-main (fs/path root "tui" "main.ts")]
+    (when-not (fs/exists? tui-main)
+      (fail! (str red "Error:" reset " TUI not found at " tui-main)))
+    (println (str green "Starting SwarmForge TUI in " reset root))
+    (process/exec "sh" "-c" (str "cd " (sq root) " && node " (sq (str tui-main))))))
+
 (defn -main [& args]
   (case (first args)
     "--test-parse" (test-parse! (or (second args) (System/getProperty "user.dir")))
@@ -598,6 +605,7 @@
     "--test-agent-start-delay" (println (env-long "SWARMFORGE_AGENT_START_DELAY_MS" 1500))
     "--test-sleep-inhibitor-prefix" (test-sleep-inhibitor-prefix!)
     "--test-tmux-base-indexes" (test-tmux-base-indexes! (second args))
+    "tui" (run-tui! (or (second args) (System/getProperty "user.dir")))
     (run-main! (or (first args) (System/getProperty "user.dir")))))
 
 (apply -main *command-line-args*)
