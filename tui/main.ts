@@ -1,4 +1,4 @@
-import { App } from "./src/app.ts";
+import { App, REQUIRED_SIZE } from "./src/app.ts";
 import { FileSystemTuiIO, projectRoot } from "./src/io.ts";
 import { renderFrame, type FrameModel } from "./src/render.ts";
 import type { Key } from "./src/types.ts";
@@ -21,7 +21,7 @@ function screenFromApp(app: App): FrameModel {
     selection: app.selection,
     errorMessage: app.errorMessage,
     terminalSize: app.io.terminalSize(),
-    requiredSize: { cols: 100, rows: 30 },
+    requiredSize: REQUIRED_SIZE,
   };
 }
 

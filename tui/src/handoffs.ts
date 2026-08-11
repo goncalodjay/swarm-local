@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import type { HandoffInfo, HandoffSnapshot } from "./types.ts";
 
-const HEADER_FIELDS = ["task", "type", "to", "created_at", "dequeued_at", "completed_at"] as const;
+const HANDOFF_STATES = ["new", "in_process", "completed"] as const;
 
 export function parseHeaders(text: string): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -37,7 +37,7 @@ function listHandoffs(dir: string): string[] {
 }
 
 function hasPendingUserNote(inboxRoot: string): boolean {
-  const toUserFiles = ["new", "in_process", "completed"]
+  const toUserFiles = HANDOFF_STATES
     .map((sub) => listHandoffs(path.join(inboxRoot, sub)))
     .flat();
   for (const file of toUserFiles) {

@@ -44,15 +44,18 @@ export interface HandoffEvent {
 
 export function snapshotEvents(snapshot: AgentState["handoffs"]): HandoffEvent[] {
   const events: HandoffEvent[] = [];
-  for (const h of snapshot.queued) pushEvents(events, h, "queued");
-  for (const h of snapshot.inProcess) pushEvents(events, h, "in process");
-  for (const h of snapshot.completed) pushEvents(events, h, "completed");
+  for (const [state, handoffs] of [
+    ["queued", snapshot.queued],
+    ["in process", snapshot.inProcess],
+    ["completed", snapshot.completed],
+  ] as const) {
+    for (const handoff of handoffs) pushEvents(events, handoff, state);
+  }
   return events;
 }
 
 function pushEvents(events: HandoffEvent[], h: HandoffInfo, state: string): void {
-  const createdAt = h.created_at ? `created ${state} ${h.created_at}`.trim() : "";
-  if (createdAt !== "") events.push({ at: h.created_at ?? "", label: `created (${state})`, task: h.task });
+  if (h.created_at) events.push({ at: h.created_at, label: `created (${state})`, task: h.task });
   if (h.dequeued_at) events.push({ at: h.dequeued_at, label: "dequeued", task: h.task });
   if (h.completed_at) events.push({ at: h.completed_at, label: "completed", task: h.task });
 }

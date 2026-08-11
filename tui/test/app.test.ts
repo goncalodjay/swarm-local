@@ -88,6 +88,16 @@ test("start with no socket shows error view", () => {
   assert.equal(app.view, "error");
 });
 
+test("checkSocket returns to the dashboard when the socket recovers", () => {
+  const io = new FakeIO();
+  io.socketOk = false;
+  const app = new App(io);
+  app.start();
+  io.socketOk = true;
+  app.checkSocket();
+  assert.equal(app.view, "dashboard");
+});
+
 test("start with small terminal shows too-small view", () => {
   const io = new FakeIO();
   io.size = { cols: 80, rows: 24 };

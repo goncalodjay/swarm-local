@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { App, type TuiIO } from "../tui/src/app.ts";
+import { App, REQUIRED_SIZE, type TuiIO } from "../tui/src/app.ts";
 import { parseRoles } from "../tui/src/roles.ts";
 import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
 import { renderFrame, type FrameModel } from "../tui/src/render.ts";
@@ -85,10 +85,20 @@ function roleWorktree(root: string, worktreeName: string): string {
   return path.join(root, ".worktrees", worktreeName);
 }
 
+function roleDefinition(role: string) {
+  const definition = ROLES.find((candidate) => candidate.role === role);
+  if (!definition) throw new Error(`Unknown role ${role}`);
+  return definition;
+}
+
+function worktreePath(root: string, worktreeName: string): string {
+  return worktreeName === "master" ? root : roleWorktree(root, worktreeName);
+}
+
 function rolesTsv(root: string): string {
   return ROLES.map((r) => {
-    const worktreePath = r.worktreeName === "master" ? root : roleWorktree(root, r.worktreeName);
-    return [r.role, r.worktreeName, worktreePath, r.session, r.displayName, r.agent, r.mode].join("\t");
+    const rolePath = worktreePath(root, r.worktreeName);
+    return [r.role, r.worktreeName, rolePath, r.session, r.displayName, r.agent, r.mode].join("\t");
   }).join("\n") + "\n";
 }
 
@@ -103,7 +113,7 @@ export function createWorld(): World {
   mkdirSync(path.join(root, ".swarmforge"), { recursive: true });
   writeFileSync(path.join(root, ".swarmforge", "roles.tsv"), rolesTsv(root));
   for (const r of ROLES) {
-    const worktree = r.worktreeName === "master" ? root : roleWorktree(root, r.worktreeName);
+    const worktree = worktreePath(root, r.worktreeName);
     ensureInbox(worktree);
   }
   const socket = path.join(root, ".swarmforge", "swarm.sock");
@@ -139,16 +149,8 @@ export function startSwarm(world: World): void {
   world.socketOk = true;
 }
 
-function agentIndex(world: World, role: string): number {
-  const index = world.app.agents.findIndex((a) => a.role === role);
-  if (index === -1) throw new Error(`No agent row for role: ${role}`);
-  return index;
-}
-
 function handoffPath(world: World, role: string, sub: string, name: string): string {
-  const row = ROLES.find((r) => r.role === role);
-  if (!row) throw new Error(`Unknown role ${role}`);
-  const worktree = row.worktreeName === "master" ? world.root : roleWorktree(world.root, row.worktreeName);
+  const worktree = worktreePath(world.root, roleDefinition(role).worktreeName);
   return path.join(worktree, ".swarmforge", "handoffs", "inbox", sub, name);
 }
 
@@ -175,7 +177,7 @@ export function captureFrame(world: World): void {
     selection: world.app.selection,
     errorMessage: world.app.errorMessage,
     terminalSize: world.io.terminalSize(),
-    requiredSize: { cols: 100, rows: 30 },
+    requiredSize: REQUIRED_SIZE,
   };
   world.frame = renderFrame(model);
   world.rendered = world.frame.join("\n");

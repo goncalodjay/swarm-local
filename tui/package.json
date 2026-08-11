@@ -2,5 +2,9 @@
   "name": "swarm-tui",
   "private": true,
   "type": "module",
-  "description": "SwarmForge terminal dashboard. Zero runtime dependencies; runs on Node native TypeScript type stripping."
+  "description": "SwarmForge terminal dashboard. Zero runtime dependencies; runs on Node native TypeScript type stripping.",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "test:property": "node --test test/property.test.ts"
+  }
 }
