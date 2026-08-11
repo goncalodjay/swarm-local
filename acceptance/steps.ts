@@ -10,6 +10,7 @@ import {
   writeUserNote,
   captureFrame,
   findAgentRow,
+  parseAgentRow,
   markerForName,
   type World,
 } from "./world.ts";
@@ -18,10 +19,11 @@ import type { StepHandlerDef } from "./runtime.ts";
 type Handler = StepHandlerDef<World>;
 
 function agentsPanelRoles(world: World): string[] {
+  const configured = new Set(world.app.roles.map((r) => r.role));
   const roles: string[] = [];
   for (const line of world.frame) {
-    const match = /^[ >] . (\S+)/.exec(line);
-    if (match) roles.push(match[1]);
+    const row = parseAgentRow(line);
+    if (row && configured.has(row.role)) roles.push(row.role);
   }
   return roles;
 }

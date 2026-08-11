@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   markerGlyph,
   statusLabel,
+  renderHeader,
+  renderLegend,
   renderMenuBar,
   renderAgentRow,
   renderAgentsPanel,
@@ -164,7 +166,7 @@ function stubApp(overrides: Partial<App> = {}, size: TerminalSize = { cols: 120,
     agents: [],
     selection: 0,
     errorMessage: "",
-    io: { terminalSize: () => size } as unknown as TuiIO,
+    io: { terminalSize: () => size, socketPath: () => "/p/.swarmforge/swarm.sock" } as unknown as TuiIO,
     ...overrides,
   };
   return stub as App;
@@ -191,4 +193,55 @@ test("frameModel reads terminal size from the IO adapter", () => {
 test("frameModel always reports the required size", () => {
   const m = frameModel(stubApp({}, { cols: 200, rows: 60 }));
   assert.deepEqual(m.requiredSize, { cols: 100, rows: 30 });
+});
+
+test("frameModel carries the socket path", () => {
+  const m = frameModel(stubApp());
+  assert.equal(m.socket, "/p/.swarmforge/swarm.sock");
+});
+
+test("renderHeader shows title, socket and terminal size", () => {
+  const m = frameModel(stubApp({}, { cols: 120, rows: 40 }));
+  const header = renderHeader(m).replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(header.includes("SwarmForge TUI"));
+  assert.ok(header.includes("/p/.swarmforge/swarm.sock"));
+  assert.ok(header.includes("120x40"));
+});
+
+test("renderHeader reports a missing socket", () => {
+  const m = frameModel(stubApp({}, { cols: 120, rows: 40 }));
+  const m2: FrameModel = { ...m, socket: "" };
+  const header = renderHeader(m2).replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(header.includes("socket: —"));
+});
+
+test("renderLegend covers every status marker", () => {
+  const legend = renderLegend();
+  for (const glyph of [markerGlyph("spinner"), markerGlyph("dot"), markerGlyph("bang")]) {
+    assert.ok(legend.includes(glyph), `legend missing ${glyph}`);
+  }
+});
+
+test("renderFrame dashboard draws a boxed frame", () => {
+  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", i === 1 ? "fix-login" : null));
+  const frame = renderFrame(model("dashboard", agents, 1)).join("\n");
+  assert.ok(frame.includes("┌"));
+  assert.ok(frame.includes("└"));
+  assert.ok(frame.includes("Agents"));
+  assert.ok(frame.includes("Detail — coder"));
+  assert.ok(frame.includes("◐ coder fix-login"));
+  assert.ok(frame.includes("↑/↓ select"));
+});
+
+test("renderFrame error view is boxed", () => {
+  const frame = renderFrame(model("error", [], 0)).join("\n");
+  assert.ok(frame.includes("Swarm unavailable"));
+  assert.ok(frame.includes("└"));
+});
+
+test("renderFrame too-small view is boxed", () => {
+  const frame = renderFrame(model("too-small", [], 0, { terminalSize: { cols: 80, rows: 24 } })).join("\n");
+  assert.ok(frame.includes("80x24"));
+  assert.ok(frame.includes("100x30"));
+  assert.ok(frame.includes("└"));
 });
