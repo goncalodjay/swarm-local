@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { parseHeaders } from "../src/handoffs.ts";
-import { parseRoles } from "../src/roles.ts";
-import { moveSelection } from "../src/selection.ts";
-import { computeStatus, statusToMarker } from "../src/status.ts";
-import type { HandoffSnapshot } from "../src/types.ts";
-import { deterministicIntegers, forAll } from "./property.ts";
+import { parseHeaders } from "../../src/handoffs.ts";
+import { parseRoles } from "../../src/roles.ts";
+import { moveSelection } from "../../src/selection.ts";
+import { computeStatus, statusToMarker } from "../../src/status.ts";
+import type { HandoffSnapshot } from "../../src/types.ts";
+import { deterministicIntegers, forAll } from "../helpers/property.ts";
 
 const randomValues = deterministicIntegers(200);
 

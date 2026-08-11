@@ -11,9 +11,11 @@ import {
   renderError,
   renderTooSmall,
   renderFrame,
+  frameModel,
   type FrameModel,
 } from "../src/render.ts";
-import type { AgentState, Role } from "../src/types.ts";
+import type { App, TuiIO } from "../src/app.ts";
+import type { AgentState, Role, TerminalSize } from "../src/types.ts";
 
 const roles: Role[] = [
   { role: "specifier", worktreeName: "master", worktreePath: "/p", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", receiveMode: "task" },
@@ -153,4 +155,40 @@ test("renderFrame too-small view reports size", () => {
   const frame = renderFrame(model("too-small", [], 0, { terminalSize: { cols: 80, rows: 24 } })).join("\n");
   assert.ok(frame.includes("80x24"));
   assert.ok(frame.includes("100x30"));
+});
+
+function stubApp(overrides: Partial<App> = {}, size: TerminalSize = { cols: 120, rows: 40 }): App {
+  const stub: Partial<App> = {
+    view: "dashboard",
+    roles,
+    agents: [],
+    selection: 0,
+    errorMessage: "",
+    io: { terminalSize: () => size } as unknown as TuiIO,
+    ...overrides,
+  };
+  return stub as App;
+}
+
+test("frameModel maps the attached view to the dashboard", () => {
+  const m = frameModel(stubApp({ view: "attached" }));
+  assert.equal(m.view, "dashboard");
+});
+
+test("frameModel passes through roles, agents, selection and error message", () => {
+  const m = frameModel(stubApp({ selection: 2, errorMessage: "boom" }));
+  assert.deepEqual(m.roles, roles);
+  assert.deepEqual(m.agents, []);
+  assert.equal(m.selection, 2);
+  assert.equal(m.errorMessage, "boom");
+});
+
+test("frameModel reads terminal size from the IO adapter", () => {
+  const m = frameModel(stubApp({}, { cols: 80, rows: 24 }));
+  assert.deepEqual(m.terminalSize, { cols: 80, rows: 24 });
+});
+
+test("frameModel always reports the required size", () => {
+  const m = frameModel(stubApp({}, { cols: 200, rows: 60 }));
+  assert.deepEqual(m.requiredSize, { cols: 100, rows: 30 });
 });

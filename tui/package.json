@@ -5,6 +5,6 @@
   "description": "SwarmForge terminal dashboard. Zero runtime dependencies; runs on Node native TypeScript type stripping.",
   "scripts": {
     "test": "node --test test/*.test.ts",
-    "test:property": "node --test test/property.test.ts"
+    "test:property": "node --test test/property/*.test.ts"
   }
 }

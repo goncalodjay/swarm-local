@@ -1,3 +1,4 @@
+import { REQUIRED_SIZE, type App } from "./app.ts";
 import type { AgentState, HandoffInfo, Role, Status, TerminalSize } from "./types.ts";
 
 export interface FrameModel {
@@ -8,6 +9,18 @@ export interface FrameModel {
   errorMessage: string;
   terminalSize: TerminalSize;
   requiredSize: TerminalSize;
+}
+
+export function frameModel(app: App): FrameModel {
+  return {
+    view: app.view === "attached" ? "dashboard" : app.view,
+    roles: app.roles,
+    agents: app.agents,
+    selection: app.selection,
+    errorMessage: app.errorMessage,
+    terminalSize: app.io.terminalSize(),
+    requiredSize: REQUIRED_SIZE,
+  };
 }
 
 export function markerGlyph(marker: AgentState["marker"]): string {

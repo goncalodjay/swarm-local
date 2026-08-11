@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { App, REQUIRED_SIZE, type TuiIO } from "../tui/src/app.ts";
+import { App, type TuiIO } from "../tui/src/app.ts";
 import { parseRoles } from "../tui/src/roles.ts";
 import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
-import { renderFrame, type FrameModel } from "../tui/src/render.ts";
+import { frameModel, renderFrame } from "../tui/src/render.ts";
 import type { HandoffSnapshot, Role, TerminalSize } from "../tui/src/types.ts";
 
 const ROLES = [
@@ -170,16 +170,7 @@ export function writeUserNote(world: World, role: string): void {
 }
 
 export function captureFrame(world: World): void {
-  const model: FrameModel = {
-    view: world.app.view === "attached" ? "dashboard" : world.app.view,
-    roles: world.app.roles,
-    agents: world.app.agents,
-    selection: world.app.selection,
-    errorMessage: world.app.errorMessage,
-    terminalSize: world.io.terminalSize(),
-    requiredSize: REQUIRED_SIZE,
-  };
-  world.frame = renderFrame(model);
+  world.frame = renderFrame(frameModel(world.app));
   world.rendered = world.frame.join("\n");
 }
 

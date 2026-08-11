@@ -1,29 +1,9 @@
-import { App, REQUIRED_SIZE } from "./src/app.ts";
+import { App } from "./src/app.ts";
 import { FileSystemTuiIO, projectRoot } from "./src/io.ts";
-import { renderFrame, type FrameModel } from "./src/render.ts";
-import type { Key } from "./src/types.ts";
+import { parseKey } from "./src/keys.ts";
+import { frameModel, renderFrame } from "./src/render.ts";
 
 const POLL_INTERVAL_MS = 1000;
-
-function parseKey(data: string): Key | null {
-  if (data === "\u001b[A") return "up";
-  if (data === "\u001b[B") return "down";
-  if (data === "\r" || data === "\n") return "enter";
-  if (data === "q") return "quit";
-  return null;
-}
-
-function screenFromApp(app: App): FrameModel {
-  return {
-    view: app.view === "attached" ? "dashboard" : app.view,
-    roles: app.roles,
-    agents: app.agents,
-    selection: app.selection,
-    errorMessage: app.errorMessage,
-    terminalSize: app.io.terminalSize(),
-    requiredSize: REQUIRED_SIZE,
-  };
-}
 
 async function main(): Promise<void> {
   const root = projectRoot(process.cwd());
@@ -32,7 +12,7 @@ async function main(): Promise<void> {
   app.start();
 
   const render = (): void => {
-    const frame = renderFrame(screenFromApp(app));
+    const frame = renderFrame(frameModel(app));
     process.stdout.write("\x1b[2J\x1b[H");
     process.stdout.write(frame.join("\n") + "\n");
   };

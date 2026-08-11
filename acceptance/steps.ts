@@ -26,6 +26,11 @@ function agentsPanelRoles(world: World): string[] {
   return roles;
 }
 
+function refreshAndCapture(world: World): void {
+  world.app.refreshAgents();
+  captureFrame(world);
+}
+
 function roleRowText(world: World, role: string): string {
   const row = findAgentRow(world, role);
   return `${row.selected ? ">" : " "} ${row.marker} ${row.role}${row.task ? " " + row.task : ""}`;
@@ -52,26 +57,17 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the TUI renders the agents panel$/,
-    run: (world) => {
-      world.app.refreshAgents();
-      captureFrame(world);
-    },
+    run: refreshAndCapture,
   });
 
   handlers.push({
     pattern: /^the TUI renders the detail pane$/,
-    run: (world) => {
-      world.app.refreshAgents();
-      captureFrame(world);
-    },
+    run: refreshAndCapture,
   });
 
   handlers.push({
     pattern: /^the TUI renders$/,
-    run: (world) => {
-      world.app.refreshAgents();
-      captureFrame(world);
-    },
+    run: refreshAndCapture,
   });
 
   handlers.push({
@@ -311,10 +307,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the agent coder is idle$/,
-    run: (world) => {
-      world.app.refreshAgents();
-      captureFrame(world);
-    },
+    run: refreshAndCapture,
   });
 
   handlers.push({
@@ -361,10 +354,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the TUI does not crash$/,
-    run: (world) => {
-      world.app.refreshAgents();
-      captureFrame(world);
-    },
+    run: refreshAndCapture,
   });
 
   handlers.push({

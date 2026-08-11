@@ -33,12 +33,21 @@ function metadataDir(generatedDir: string): string {
 }
 
 function featureName(pathStr: string): string {
-  return path.basename(pathStr).replace(/\.json$/, "");
+  return path.basename(pathStr).replace(/\.[^.]+$/, "");
+}
+
+function irFeatureName(featureJson: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(featureJson, "utf8")) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : null;
+  } catch {
+    return null;
+  }
 }
 
 function generatedTestsForFeature(generatedDir: string, featureJson: string): string[] {
   const metaDir = metadataDir(generatedDir);
-  const wanted = featureName(featureJson);
+  const wanted = irFeatureName(featureJson) ?? featureName(featureJson);
   if (!existsSync(metaDir)) {
     return [];
   }
