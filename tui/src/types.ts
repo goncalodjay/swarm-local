@@ -38,11 +38,27 @@ export interface AgentState {
 
 export type AppView = "dashboard" | "error" | "too-small" | "attached";
 
+export type Mode = "normal" | "prefix";
+
+export type FocusTarget = "agents" | "detail" | "menu";
+
 export type Key =
   | "up"
   | "down"
+  | "left"
+  | "right"
+  | "j"
+  | "k"
+  | "home"
+  | "end"
+  | "g"
+  | "G"
   | "enter"
-  | "quit";
+  | "quit"
+  | "esc"
+  | "tab"
+  | "ctrl+k"
+  | "?";
 
 export interface TerminalSize {
   cols: number;

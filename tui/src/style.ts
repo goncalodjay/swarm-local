@@ -57,7 +57,11 @@ export function detectColors(): boolean {
 }
 
 export function visibleLength(text: string): number {
-  return text.replace(ANSI_SEQUENCE, "").length;
+  return stripAnsi(text).length;
+}
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_SEQUENCE, "");
 }
 
 export function padVisible(text: string, width: number): string {

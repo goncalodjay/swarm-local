@@ -15,6 +15,8 @@ import {
   type World,
 } from "./world.ts";
 import type { StepHandlerDef } from "./runtime.ts";
+import { menuItemIndex, menuItems } from "../tui/src/menu.ts";
+import type { Key } from "../tui/src/types.ts";
 
 type Handler = StepHandlerDef<World>;
 
@@ -220,6 +222,7 @@ export function createHandlers(): Handler[] {
       const index = world.app.agents.findIndex((a) => a.role === role);
       assert.ok(index >= 0, `unknown role ${role}`);
       world.app.selection = index;
+      world.app.focus = "agents";
       captureFrame(world);
     },
   });
@@ -246,6 +249,118 @@ export function createHandlers(): Handler[] {
     run: async (world) => {
       await world.app.press("enter");
       captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I press ctrl\+k$/,
+    run: async (world) => {
+      await world.app.press("ctrl+k");
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I press esc$/,
+    run: async (world) => {
+      await world.app.press("esc");
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I press tab (\d+) times$/,
+    run: async (world, _step, _example, [times]) => {
+      for (let i = 0; i < Number(times); i++) await world.app.press("tab");
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I press (j|k|Home|End|g|G)$/,
+    run: async (world, _step, _example, [key]) => {
+      const mapping: Record<string, Key> = { j: "j", k: "k", Home: "home", End: "end", g: "g", G: "G" };
+      await world.app.press(mapping[key]);
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I press (left|right)$/,
+    run: async (world, _step, _example, [key]) => {
+      await world.app.press(key as "left" | "right");
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I press \?$/,
+    run: async (world) => {
+      await world.app.press("?");
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the focus is on (agents|detail|menu)$/,
+    run: (world, step, _example, [panel]) => {
+      const focus = panel as "agents" | "detail" | "menu";
+      if (step.keyword.trim() === "Then") {
+        assert.equal(world.app.focus, focus);
+      } else {
+        world.app.focus = focus;
+        captureFrame(world);
+      }
+    },
+  });
+
+  handlers.push({
+    pattern: /^the menu focus is on (dashboard|specifier|coder|refactorer|architect|logs|costs)$/,
+    run: (world, step, _example, [item]) => {
+      const index = menuItemIndex(menuItems(world.app.roles), item);
+      if (step.keyword.trim() === "Then") {
+        assert.equal(world.app.menuFocus, index, `menu focus should be ${item}`);
+      } else {
+        world.app.menuFocus = index;
+        captureFrame(world);
+      }
+    },
+  });
+
+  handlers.push({
+    pattern: /^the footer shows "([^"]+)"$/,
+    run: (world, _step, _example, [text]) => {
+      assert.ok(world.rendered.includes(text), `footer missing ${text}`);
+    },
+  });
+
+  handlers.push({
+    pattern: /^a hint "([^"]+): not implemented" is shown in the footer$/,
+    run: (world, _step, _example, [item]) => {
+      assert.ok(world.rendered.includes(`${item}: not implemented`), `hint missing ${item}`);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the help overlay is shown$/,
+    run: (world) => {
+      assert.equal(world.app.helpOpen, true);
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the help overlay is closed$/,
+    run: (world) => {
+      assert.equal(world.app.helpOpen, false);
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the help overlay shows "([^"]+)"$/,
+    run: (world, _step, _example, [key]) => {
+      assert.ok(world.rendered.includes(key), `help overlay missing ${key}`);
     },
   });
 

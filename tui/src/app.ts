@@ -1,8 +1,11 @@
-import type { AgentState, AppView, HandoffSnapshot, Key, Role, TerminalSize } from "./types.ts";
+import type { AgentState, AppView, FocusTarget, HandoffSnapshot, Key, Mode, Role, TerminalSize } from "./types.ts";
 import { moveSelection } from "./selection.ts";
+import { isDisabledMenuItem, menuItems, moveMenuFocus } from "./menu.ts";
 import { agentState } from "./status.ts";
 
 export const REQUIRED_SIZE: TerminalSize = { cols: 100, rows: 30 };
+
+const FOCUS_ORDER: FocusTarget[] = ["agents", "detail", "menu"];
 
 export interface TuiIO {
   readRoles(): Role[];
@@ -22,6 +25,11 @@ export class App {
   view: AppView = "dashboard";
   errorMessage = "";
   attachedSession: string | null = null;
+  mode: Mode = "normal";
+  focus: FocusTarget = "menu";
+  menuFocus = 0;
+  hint: string | null = null;
+  helpOpen = false;
   io: TuiIO;
 
   constructor(io: TuiIO) {
@@ -67,20 +75,82 @@ export class App {
   }
 
   async press(key: Key): Promise<void> {
+    if (this.view === "attached") return;
+    this.hint = null;
+    if (this.helpOpen) {
+      if (key === "quit" || key === "esc" || key === "?") this.helpOpen = false;
+      return;
+    }
+    if (this.mode === "prefix") {
+      this.mode = "normal";
+      switch (key) {
+        case "tab":
+          this.cycleFocus();
+          break;
+        case "?":
+          this.helpOpen = true;
+          break;
+        case "quit":
+          this.quit();
+          break;
+        default:
+          break;
+      }
+      return;
+    }
     switch (key) {
       case "up":
-      case "down": {
+      case "down":
+      case "j":
+      case "k":
+      case "home":
+      case "end":
+      case "g":
+      case "G":
         this.selection = moveSelection(this.selection, key, this.agents.length);
         break;
-      }
-      case "enter": {
-        await this.attachSelected();
+      case "left":
+      case "right":
+        if (this.focus === "menu") this.menuFocus = moveMenuFocus(this.menuFocus, key, menuItems(this.roles).length);
         break;
-      }
-      case "quit": {
+      case "tab":
+        this.cycleFocus();
+        break;
+      case "enter":
+        await this.activate();
+        break;
+      case "ctrl+k":
+        this.mode = "prefix";
+        break;
+      case "quit":
         this.quit();
         break;
-      }
+      default:
+        break;
+    }
+  }
+
+  cycleFocus(): void {
+    const index = FOCUS_ORDER.indexOf(this.focus);
+    this.focus = FOCUS_ORDER[(index + 1) % FOCUS_ORDER.length];
+  }
+
+  async activate(): Promise<void> {
+    if (this.focus === "agents") {
+      await this.attachSelected();
+      return;
+    }
+    if (this.focus !== "menu") return;
+    const items = menuItems(this.roles);
+    const item = items[this.menuFocus] ?? "dashboard";
+    if (isDisabledMenuItem(item)) {
+      this.hint = `${item}: not implemented`;
+      return;
+    }
+    const roleIndex = this.roles.findIndex((role) => role.role === item);
+    if (roleIndex >= 0) {
+      this.focus = "agents";
+      this.selection = roleIndex;
     }
   }
 

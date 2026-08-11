@@ -47,6 +47,12 @@ function model(view: FrameModel["view"], agents: AgentState[], selection: number
     errorMessage: "boom",
     terminalSize: { cols: 120, rows: 40 },
     requiredSize: { cols: 100, rows: 30 },
+    socket: "/p/.swarmforge/swarm.sock",
+    mode: "normal",
+    focus: "menu",
+    menuFocus: 0,
+    hint: null,
+    helpOpen: false,
     ...overrides,
   };
 }
@@ -122,9 +128,10 @@ test("renderDetailPane handles null agent", () => {
 });
 
 test("renderFooter lists keybindings", () => {
-  const footer = renderFooter();
+  const footer = renderFooter("normal", null, false);
   assert.ok(footer.includes("Enter"));
   assert.ok(footer.includes("q"));
+  assert.ok(footer.includes("Ctrl+k"));
 });
 
 test("renderError shows unavailable message", () => {
@@ -166,6 +173,11 @@ function stubApp(overrides: Partial<App> = {}, size: TerminalSize = { cols: 120,
     agents: [],
     selection: 0,
     errorMessage: "",
+    mode: "normal",
+    focus: "menu",
+    menuFocus: 0,
+    hint: null,
+    helpOpen: false,
     io: { terminalSize: () => size, socketPath: () => "/p/.swarmforge/swarm.sock" } as unknown as TuiIO,
     ...overrides,
   };
@@ -244,4 +256,44 @@ test("renderFrame too-small view is boxed", () => {
   assert.ok(frame.includes("80x24"));
   assert.ok(frame.includes("100x30"));
   assert.ok(frame.includes("└"));
+});
+
+test("renderFooter switches to the prefix footer in prefix mode", () => {
+  const footer = renderFooter("prefix", null, false);
+  assert.ok(footer.includes("Tab cycle focus"));
+  assert.ok(footer.includes("? help"));
+  assert.ok(footer.includes("q quit"));
+  assert.ok(footer.includes("Esc cancel"));
+});
+
+test("renderFooter shows a transient hint when present", () => {
+  assert.equal(renderFooter("normal", "logs: not implemented", false), "logs: not implemented");
+});
+
+test("renderFooter shows the close hint while the help overlay is open", () => {
+  assert.ok(renderFooter("normal", null, true).includes("close help"));
+});
+
+test("renderFrame with an open help overlay includes the keybinding list", () => {
+  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", i === 1 ? "fix-login" : null));
+  const frame = renderFrame(model("dashboard", agents, 1, { helpOpen: true })).join("\n");
+  for (const key of ["Ctrl+k", "Tab", "?", "j/k", "g/G"]) {
+    assert.ok(frame.includes(key), `help overlay missing ${key}`);
+  }
+  assert.ok(frame.includes("Focus: menu"));
+});
+
+test("renderFrame highlights the focused menu item", () => {
+  const frame = renderFrame(model("dashboard", [], 0, { focus: "menu", menuFocus: 5 })).join("\n");
+  assert.ok(frame.includes("(logs)"));
+  const focused = renderFrame(model("dashboard", [], 0, { focus: "menu", menuFocus: 0 })).join("\n");
+  assert.ok(focused.includes("[dashboard]"));
+});
+
+test("renderFrame highlights the focused panel header", () => {
+  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", null));
+  const focusedAgents = renderFrame(model("dashboard", agents, 1, { focus: "agents" })).join("\n");
+  const focusedDetail = renderFrame(model("dashboard", agents, 1, { focus: "detail" })).join("\n");
+  assert.ok(focusedAgents.includes("Agents"));
+  assert.ok(focusedDetail.includes("Detail — coder"));
 });

@@ -1,6 +1,7 @@
 import { REQUIRED_SIZE, type App } from "./app.ts";
-import { createStyle, detectColors, padVisible, type Style } from "./style.ts";
-import type { AgentState, HandoffInfo, Role, Status, TerminalSize } from "./types.ts";
+import { isDisabledMenuItem, MENU_DASHBOARD, menuItems } from "./menu.ts";
+import { createStyle, detectColors, padVisible, stripAnsi, type Style } from "./style.ts";
+import type { AgentState, FocusTarget, HandoffInfo, Mode, Role, Status, TerminalSize } from "./types.ts";
 
 const style: Style = createStyle({ colors: detectColors() });
 
@@ -15,6 +16,11 @@ export interface FrameModel {
   terminalSize: TerminalSize;
   requiredSize: TerminalSize;
   socket: string;
+  mode: Mode;
+  focus: FocusTarget;
+  menuFocus: number;
+  hint: string | null;
+  helpOpen: boolean;
 }
 
 export function frameModel(app: App): FrameModel {
@@ -27,6 +33,11 @@ export function frameModel(app: App): FrameModel {
     terminalSize: app.io.terminalSize(),
     requiredSize: REQUIRED_SIZE,
     socket: app.io.socketPath(),
+    mode: app.mode,
+    focus: app.focus,
+    menuFocus: app.menuFocus,
+    hint: app.hint,
+    helpOpen: app.helpOpen,
   };
 }
 
@@ -86,12 +97,18 @@ export function renderHeader(model: FrameModel): string {
   return `${style.bold(style.cyan("SwarmForge TUI"))} · ${socket} · poll 1s · ${size}`;
 }
 
-export function renderMenuBar(roles: Role[]): string {
-  const parts = [style.bold("[dashboard]")];
-  for (const role of roles) parts.push(`[${role.role}]`);
-  parts.push(style.dim("(logs)"));
-  parts.push(style.dim("(costs)"));
-  return parts.join(" ");
+export function renderMenuBar(roles: Role[], focus: FocusTarget = "agents", menuFocus = 0): string {
+  return menuItems(roles)
+    .map((item, index) => renderMenuItem(item, focus === "menu" && index === menuFocus))
+    .join(" ");
+}
+
+function renderMenuItem(item: string, active: boolean): string {
+  const text = isDisabledMenuItem(item) ? `(${item})` : `[${item}]`;
+  if (active) return style.bold(style.cyan(text));
+  if (isDisabledMenuItem(item)) return style.dim(text);
+  if (item === MENU_DASHBOARD) return style.bold(text);
+  return text;
 }
 
 export function renderAgentRow(agent: AgentState, selected: boolean): string {
@@ -132,8 +149,11 @@ export function renderLegend(): string {
   return `${markerGlyph("spinner")} working · ${markerGlyph("dot")} finished · ${markerGlyph("bang")} needs human · (blank) idle`;
 }
 
-export function renderFooter(): string {
-  return "↑/↓ select · Enter attach · q quit";
+export function renderFooter(mode: Mode, hint: string | null, helpOpen: boolean): string {
+  if (hint !== null) return hint;
+  if (helpOpen) return "q / Esc close help";
+  if (mode === "prefix") return "Tab cycle focus · ? help · q quit · Esc cancel";
+  return "↑/↓ select · Enter attach · Ctrl+k menu · q quit";
 }
 
 export function renderError(errorMessage: string): string[] {
@@ -163,6 +183,10 @@ function bottomBorder(cols: number): string {
   return `└${"─".repeat(cols - 2)}┘`;
 }
 
+function panelTitle(text: string, focused: boolean): string {
+  return focused ? style.bold(style.cyan(text)) : text;
+}
+
 function renderDashboard(model: FrameModel): string[] {
   const cols = Math.max(model.terminalSize.cols, REQUIRED_SIZE.cols);
   const inner = cols - 2;
@@ -170,13 +194,13 @@ function renderDashboard(model: FrameModel): string[] {
   lines.push(`┌${"─".repeat(inner)}┐`);
   lines.push(`│ ${padVisible(renderHeader(model), inner - 1)}│`);
   lines.push(`├${"─".repeat(inner)}┤`);
-  lines.push(`│ ${padVisible(renderMenuBar(model.roles), inner - 1)}│`);
+  lines.push(`│ ${padVisible(renderMenuBar(model.roles, model.focus, model.menuFocus), inner - 1)}│`);
   lines.push(dividerRow(cols, "┬"));
 
   const agents = renderAgentsPanel(model.agents, model.selection);
   const detail = renderDetailPane(model.agents[model.selection] ?? null);
   const detailTitle = detail[0] ?? "";
-  lines.push(contentRow(style.bold(style.cyan("Agents")), style.bold(detailTitle), inner));
+  lines.push(contentRow(panelTitle("Agents", model.focus === "agents"), panelTitle(detailTitle, model.focus === "detail"), inner));
 
   const bodyHeight = Math.max(agents.length, detail.length - 1);
   for (let i = 0; i < bodyHeight; i++) {
@@ -185,9 +209,44 @@ function renderDashboard(model: FrameModel): string[] {
 
   lines.push(dividerRow(cols, "┴"));
   lines.push(`│ ${padVisible(style.dim(renderLegend()), inner - 1)}│`);
-  lines.push(`│ ${padVisible(renderFooter(), inner - 1)}│`);
+  lines.push(`│ ${padVisible(renderFooter(model.mode, model.hint, model.helpOpen), inner - 1)}│`);
   lines.push(bottomBorder(cols));
   return lines;
+}
+
+function renderHelpBox(cols: number, focus: FocusTarget): string[] {
+  const width = Math.min(46, cols - 4);
+  const inner = width - 2;
+  const row = (text: string): string => `│ ${padVisible(text, inner - 1)}│`;
+  return [
+    `┌${"─".repeat(inner)}┐`,
+    row(`Focus: ${focus}`),
+    `├${"─".repeat(inner)}┤`,
+    row("Motion  ↑/↓ · j/k   select"),
+    row("Jump    Home/End · g/G"),
+    row("Menu    ←/→ · Enter  select"),
+    row("Prefix  Ctrl+k Tab   focus"),
+    row("        Ctrl+k ?    help"),
+    row("        Ctrl+k q    quit"),
+    row("        Esc        cancel"),
+    `├${"─".repeat(inner)}┤`,
+    row("Close   q · Esc · ?"),
+    `└${"─".repeat(inner)}┘`,
+  ];
+}
+
+function overlayFrame(frame: string[], overlay: string[]): string[] {
+  const result = [...frame];
+  const overlayWidth = overlay.length > 0 ? stripAnsi(overlay[0]).length : 0;
+  const startRow = Math.max(0, Math.floor((frame.length - overlay.length) / 2));
+  for (let i = 0; i < overlay.length; i++) {
+    const row = startRow + i;
+    if (row >= result.length) break;
+    const base = stripAnsi(result[row]);
+    const startCol = Math.max(0, Math.floor((base.length - overlayWidth) / 2));
+    result[row] = base.slice(0, startCol) + overlay[i] + base.slice(startCol + overlayWidth);
+  }
+  return result;
 }
 
 function renderNoticeFrame(cols: number, title: string, body: string[]): string[] {
@@ -200,7 +259,7 @@ function renderNoticeFrame(cols: number, title: string, body: string[]): string[
     lines.push(`│ ${padVisible(bodyLine, inner - 1)}│`);
   }
   lines.push(`├${"─".repeat(inner)}┤`);
-  lines.push(`│ ${padVisible(renderFooter(), inner - 1)}│`);
+  lines.push(`│ ${padVisible(renderFooter("normal", null, false), inner - 1)}│`);
   lines.push(bottomBorder(cols));
   return lines;
 }
@@ -215,5 +274,6 @@ export function renderFrame(model: FrameModel): string[] {
     const message = renderTooSmall(model.terminalSize, model.requiredSize);
     return renderNoticeFrame(cols, message[0], message.slice(2));
   }
-  return renderDashboard(model);
+  const frame = renderDashboard(model);
+  return model.helpOpen ? overlayFrame(frame, renderHelpBox(cols, model.focus)) : frame;
 }

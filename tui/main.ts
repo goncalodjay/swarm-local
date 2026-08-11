@@ -35,11 +35,6 @@ async function main(): Promise<void> {
     const key = parseKey(data.toString("utf8"));
     if (!key) return;
     if (app.view === "attached") return;
-    if (key === "quit") {
-      clearInterval(pollTimer);
-      app.quit();
-      return;
-    }
     await app.press(key);
     render();
   };
