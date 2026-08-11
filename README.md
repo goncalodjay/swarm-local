@@ -17,7 +17,7 @@ Desde la raíz de un proyecto:
 
 ```sh
 swarm-init
-# responde los lenguajes y, para cada rol, backend, modelo y thinking/effort
+# responde los lenguajes, la auto-aprobación de permisos y, para cada rol, backend, modelo y thinking/effort
 ./swarm
 ```
 
@@ -42,6 +42,21 @@ window coder opencode coder --model provider/model --agent build --auto
 ```
 
 Los argumentos posteriores al worktree (`--model`, `--agent`, `--auto`, etc.) se pasan directamente a OpenCode. SwarmForge inicia `opencode` en el worktree del rol y entrega las instrucciones de constitución y rol mediante `--prompt`. OpenCode debe estar autenticado/configurado antes de iniciar el swarm; `--auto` aprueba permisos automáticamente y debe usarse solo si lo deseas.
+
+## Auto-aprobación de permisos
+
+`swarm-init` pregunta si los agentes deben auto-aprobar los permisos de sus herramientas (por defecto, sí). Un swarm desatendido se bloquea si un agente queda esperando confirmación, así que la auto-aprobación es el modo recomendado. Los flags se agregan a cada fila de `swarmforge/swarmforge.conf` según el backend elegido:
+
+| Backend | Flag |
+| --- | --- |
+| `claude` | `--dangerously-skip-permissions` |
+| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| `copilot` | `--allow-all` |
+| `grok` | `--permission-mode bypassPermissions` |
+| `opencode` | `--auto` |
+| `pi` | (sin flag: no pide permisos por herramienta) |
+
+Ten en cuenta el riesgo: con auto-aprobación, cada agente puede leer, escribir y ejecutar comandos sin confirmación. Los worktrees dan recuperación a nivel git, pero ejecuta el swarm solo en proyectos de confianza. Para una instalación ya inicializada, agrega el flag correspondiente manualmente al final de cada fila de `swarmforge/swarmforge.conf`.
 
 ## Configuración por rol
 

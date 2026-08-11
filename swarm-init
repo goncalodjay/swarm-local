@@ -25,6 +25,14 @@ ROLES=(specifier coder refactorer architect)
 WORKTREES=(master coder refactorer architect)
 declare -A ROLE_AGENTS ROLE_MODELS ROLE_THINKING
 SUPPORTED_AGENTS=(claude codex copilot grok opencode pi)
+# Flags de auto-aprobación por backend. Pi no pide permisos por herramienta; no necesita flag.
+declare -A AUTO_APPROVE_FLAGS=(
+  [claude]="--dangerously-skip-permissions"
+  [codex]="--dangerously-bypass-approvals-and-sandbox"
+  [copilot]="--allow-all"
+  [grok]="--permission-mode bypassPermissions"
+  [opencode]="--auto"
+)
 
 while (($#)); do
   case "$1" in
@@ -119,6 +127,10 @@ choose_model() {
   fi
 }
 
+read -r -p "¿Auto-aprobar los permisos de herramientas de los agentes? (s/n) [s]: " AUTO_APPROVE
+AUTO_APPROVE="${AUTO_APPROVE:-s}"
+AUTO_APPROVE="${AUTO_APPROVE,,}"
+
 printf '\nConfigura el backend de cada sesión. Modelo y nivel se guardan en swarmforge/swarmforge.conf.\n'
 for index in "${!ROLES[@]}"; do
   role="${ROLES[$index]}"
@@ -161,6 +173,10 @@ EOF
       codex) extra="$extra -c model_reasoning_effort=$thinking" ;;
       opencode|copilot|grok) ;;
     esac
+    if [[ "$AUTO_APPROVE" =~ ^(s|si|sí|y|yes)$ ]]; then
+      auto_flag="${AUTO_APPROVE_FLAGS[$agent]:-}"
+      [[ -n "$auto_flag" ]] && extra="$extra $auto_flag"
+    fi
     if [[ "$role" == "architect" ]]; then
       printf 'window %s %s %s batch %s\n' "$role" "$agent" "$worktree" "$extra"
     else
@@ -200,4 +216,9 @@ done
 
 printf '\nSwarmForge local instalado en %s\n' "$TARGET"
 printf 'Lenguajes configurados: %s\n' "$LANGUAGES"
+if [[ "$AUTO_APPROVE" =~ ^(s|si|sí|y|yes)$ ]]; then
+  printf 'Permisos de herramientas: auto-aprobados (editable en swarmforge/swarmforge.conf)\n'
+else
+  printf 'Permisos de herramientas: con confirmación interactiva\n'
+fi
 printf 'Inicia con: cd %q && ./swarm\n' "$TARGET"
