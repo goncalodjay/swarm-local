@@ -182,7 +182,9 @@ export interface ParsedRow {
 }
 
 export function parseAgentRow(line: string): ParsedRow | null {
-  const match = /^([ >]) (.) (\S+)( .*)?$/.exec(line);
+  const content = line.replace(/^[│├└┌] /, "");
+  const left = content.includes("│") ? content.slice(0, content.indexOf("│")) : content;
+  const match = /^([ >]) (.) (\S+)( .*)?$/.exec(left.trimEnd());
   if (!match) return null;
   return {
     selected: match[1] === ">",

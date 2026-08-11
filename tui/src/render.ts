@@ -1,5 +1,8 @@
 import { REQUIRED_SIZE, type App } from "./app.ts";
+import { ansi, padVisible, statusColor } from "./style.ts";
 import type { AgentState, HandoffInfo, Role, Status, TerminalSize } from "./types.ts";
+
+export const PANEL_WIDTH = 30;
 
 export interface FrameModel {
   view: "dashboard" | "error" | "too-small";
@@ -9,6 +12,7 @@ export interface FrameModel {
   errorMessage: string;
   terminalSize: TerminalSize;
   requiredSize: TerminalSize;
+  socket: string;
 }
 
 export function frameModel(app: App): FrameModel {
@@ -20,6 +24,7 @@ export function frameModel(app: App): FrameModel {
     errorMessage: app.errorMessage,
     terminalSize: app.io.terminalSize(),
     requiredSize: REQUIRED_SIZE,
+    socket: app.io.socketPath(),
   };
 }
 
@@ -73,11 +78,17 @@ function pushEvents(events: HandoffEvent[], h: HandoffInfo, state: string): void
   if (h.completed_at) events.push({ at: h.completed_at, label: "completed", task: h.task });
 }
 
+export function renderHeader(model: FrameModel): string {
+  const socket = model.socket === "" ? "socket: —" : `socket: ${model.socket}`;
+  const size = `${model.terminalSize.cols}x${model.terminalSize.rows}`;
+  return `${ansi.bold(ansi.cyan("SwarmForge TUI"))} · ${socket} · poll 1s · ${size}`;
+}
+
 export function renderMenuBar(roles: Role[]): string {
-  const parts = ["[dashboard]"];
+  const parts = [ansi.bold("[dashboard]")];
   for (const role of roles) parts.push(`[${role.role}]`);
-  parts.push("(logs)");
-  parts.push("(costs)");
+  parts.push(ansi.dim("(logs)"));
+  parts.push(ansi.dim("(costs)"));
   return parts.join(" ");
 }
 
@@ -97,7 +108,7 @@ export function renderDetailPane(agent: AgentState | null): string[] {
   const lines: string[] = [];
   lines.push(`Detail — ${agent.role}`);
   lines.push(`Task: ${agent.task ?? "—"}`);
-  lines.push(`State: ${statusLabel(agent.status)}`);
+  lines.push(`State: ${statusColor(agent.status)(statusLabel(agent.status))}`);
   const ip = agent.handoffs.inProcess[0];
   if (ip) {
     lines.push("Timestamps:");
@@ -113,6 +124,10 @@ export function renderDetailPane(agent: AgentState | null): string[] {
     }
   }
   return lines;
+}
+
+export function renderLegend(): string {
+  return `${markerGlyph("spinner")} working · ${markerGlyph("dot")} finished · ${markerGlyph("bang")} needs human · (blank) idle`;
 }
 
 export function renderFooter(): string {
@@ -132,22 +147,71 @@ export function renderTooSmall(current: TerminalSize, required: TerminalSize): s
   ];
 }
 
-export function renderFrame(model: FrameModel): string[] {
+function contentRow(left: string, right: string, inner: number): string {
+  const rightWidth = inner - PANEL_WIDTH - 2;
+  return `│ ${padVisible(left, PANEL_WIDTH - 1)}│ ${padVisible(right, rightWidth)}│`;
+}
+
+function dividerRow(cols: number, joint: string): string {
+  const inner = cols - 2;
+  return `├${"─".repeat(PANEL_WIDTH)}${joint}${"─".repeat(inner - PANEL_WIDTH - 1)}┤`;
+}
+
+function bottomBorder(cols: number): string {
+  return `└${"─".repeat(cols - 2)}┘`;
+}
+
+function renderDashboard(model: FrameModel): string[] {
+  const cols = Math.max(model.terminalSize.cols, REQUIRED_SIZE.cols);
+  const inner = cols - 2;
   const lines: string[] = [];
-  lines.push(renderMenuBar(model.roles));
-  lines.push("");
+  lines.push(`┌${"─".repeat(inner)}┐`);
+  lines.push(`│ ${padVisible(renderHeader(model), inner - 1)}│`);
+  lines.push(`├${"─".repeat(inner)}┤`);
+  lines.push(`│ ${padVisible(renderMenuBar(model.roles), inner - 1)}│`);
+  lines.push(dividerRow(cols, "┬"));
+
+  const agents = renderAgentsPanel(model.agents, model.selection);
+  const detail = renderDetailPane(model.agents[model.selection] ?? null);
+  const detailTitle = detail[0] ?? "";
+  lines.push(contentRow(ansi.bold(ansi.cyan("Agents")), ansi.bold(detailTitle), inner));
+
+  const bodyHeight = Math.max(agents.length, detail.length - 1);
+  for (let i = 0; i < bodyHeight; i++) {
+    lines.push(contentRow(agents[i] ?? "", detail[i + 1] ?? "", inner));
+  }
+
+  lines.push(dividerRow(cols, "┴"));
+  lines.push(`│ ${padVisible(ansi.dim(renderLegend()), inner - 1)}│`);
+  lines.push(`│ ${padVisible(renderFooter(), inner - 1)}│`);
+  lines.push(bottomBorder(cols));
+  return lines;
+}
+
+function renderNoticeFrame(cols: number, title: string, body: string[]): string[] {
+  const inner = cols - 2;
+  const lines: string[] = [];
+  lines.push(`┌${"─".repeat(inner)}┐`);
+  lines.push(`│ ${padVisible(ansi.bold(title), inner - 1)}│`);
+  lines.push(`├${"─".repeat(inner)}┤`);
+  for (const bodyLine of body) {
+    lines.push(`│ ${padVisible(bodyLine, inner - 1)}│`);
+  }
+  lines.push(`├${"─".repeat(inner)}┤`);
+  lines.push(`│ ${padVisible(renderFooter(), inner - 1)}│`);
+  lines.push(bottomBorder(cols));
+  return lines;
+}
+
+export function renderFrame(model: FrameModel): string[] {
+  const cols = Math.max(model.terminalSize.cols, REQUIRED_SIZE.cols);
   if (model.view === "error") {
-    lines.push(...renderError(model.errorMessage));
-    return lines;
+    const message = renderError(model.errorMessage);
+    return renderNoticeFrame(cols, message[0], message.slice(2));
   }
   if (model.view === "too-small") {
-    lines.push(...renderTooSmall(model.terminalSize, model.requiredSize));
-    return lines;
+    const message = renderTooSmall(model.terminalSize, model.requiredSize);
+    return renderNoticeFrame(cols, message[0], message.slice(2));
   }
-  lines.push(...renderAgentsPanel(model.agents, model.selection));
-  lines.push("");
-  lines.push(...renderDetailPane(model.agents[model.selection] ?? null));
-  lines.push("");
-  lines.push(renderFooter());
-  return lines;
+  return renderDashboard(model);
 }
