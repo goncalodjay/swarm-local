@@ -1,6 +1,8 @@
 import { REQUIRED_SIZE, type App } from "./app.ts";
-import { ansi, padVisible, statusColor } from "./style.ts";
+import { createStyle, detectColors, padVisible, type Style } from "./style.ts";
 import type { AgentState, HandoffInfo, Role, Status, TerminalSize } from "./types.ts";
+
+const style: Style = createStyle({ colors: detectColors() });
 
 export const PANEL_WIDTH = 30;
 
@@ -81,14 +83,14 @@ function pushEvents(events: HandoffEvent[], h: HandoffInfo, state: string): void
 export function renderHeader(model: FrameModel): string {
   const socket = model.socket === "" ? "socket: —" : `socket: ${model.socket}`;
   const size = `${model.terminalSize.cols}x${model.terminalSize.rows}`;
-  return `${ansi.bold(ansi.cyan("SwarmForge TUI"))} · ${socket} · poll 1s · ${size}`;
+  return `${style.bold(style.cyan("SwarmForge TUI"))} · ${socket} · poll 1s · ${size}`;
 }
 
 export function renderMenuBar(roles: Role[]): string {
-  const parts = [ansi.bold("[dashboard]")];
+  const parts = [style.bold("[dashboard]")];
   for (const role of roles) parts.push(`[${role.role}]`);
-  parts.push(ansi.dim("(logs)"));
-  parts.push(ansi.dim("(costs)"));
+  parts.push(style.dim("(logs)"));
+  parts.push(style.dim("(costs)"));
   return parts.join(" ");
 }
 
@@ -108,7 +110,7 @@ export function renderDetailPane(agent: AgentState | null): string[] {
   const lines: string[] = [];
   lines.push(`Detail — ${agent.role}`);
   lines.push(`Task: ${agent.task ?? "—"}`);
-  lines.push(`State: ${statusColor(agent.status)(statusLabel(agent.status))}`);
+    lines.push(`State: ${style.statusColor(agent.status)(statusLabel(agent.status))}`);
   const ip = agent.handoffs.inProcess[0];
   if (ip) {
     lines.push("Timestamps:");
@@ -174,7 +176,7 @@ function renderDashboard(model: FrameModel): string[] {
   const agents = renderAgentsPanel(model.agents, model.selection);
   const detail = renderDetailPane(model.agents[model.selection] ?? null);
   const detailTitle = detail[0] ?? "";
-  lines.push(contentRow(ansi.bold(ansi.cyan("Agents")), ansi.bold(detailTitle), inner));
+  lines.push(contentRow(style.bold(style.cyan("Agents")), style.bold(detailTitle), inner));
 
   const bodyHeight = Math.max(agents.length, detail.length - 1);
   for (let i = 0; i < bodyHeight; i++) {
@@ -182,7 +184,7 @@ function renderDashboard(model: FrameModel): string[] {
   }
 
   lines.push(dividerRow(cols, "┴"));
-  lines.push(`│ ${padVisible(ansi.dim(renderLegend()), inner - 1)}│`);
+  lines.push(`│ ${padVisible(style.dim(renderLegend()), inner - 1)}│`);
   lines.push(`│ ${padVisible(renderFooter(), inner - 1)}│`);
   lines.push(bottomBorder(cols));
   return lines;
@@ -192,7 +194,7 @@ function renderNoticeFrame(cols: number, title: string, body: string[]): string[
   const inner = cols - 2;
   const lines: string[] = [];
   lines.push(`┌${"─".repeat(inner)}┐`);
-  lines.push(`│ ${padVisible(ansi.bold(title), inner - 1)}│`);
+    lines.push(`│ ${padVisible(style.bold(title), inner - 1)}│`);
   lines.push(`├${"─".repeat(inner)}┤`);
   for (const bodyLine of body) {
     lines.push(`│ ${padVisible(bodyLine, inner - 1)}│`);
