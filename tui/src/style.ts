@@ -53,7 +53,7 @@ export function createStyle({ colors }: StyleOptions): Style {
 }
 
 export function detectColors(): boolean {
-  return typeof process !== "undefined" && process.env.NO_COLOR === undefined;
+  return typeof process === "undefined" || process.env.NO_COLOR === undefined;
 }
 
 export function visibleLength(text: string): number {

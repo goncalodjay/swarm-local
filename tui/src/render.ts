@@ -110,7 +110,7 @@ export function renderDetailPane(agent: AgentState | null): string[] {
   const lines: string[] = [];
   lines.push(`Detail — ${agent.role}`);
   lines.push(`Task: ${agent.task ?? "—"}`);
-    lines.push(`State: ${style.statusColor(agent.status)(statusLabel(agent.status))}`);
+  lines.push(`State: ${style.statusColor(agent.status)(statusLabel(agent.status))}`);
   const ip = agent.handoffs.inProcess[0];
   if (ip) {
     lines.push("Timestamps:");
@@ -194,7 +194,7 @@ function renderNoticeFrame(cols: number, title: string, body: string[]): string[
   const inner = cols - 2;
   const lines: string[] = [];
   lines.push(`┌${"─".repeat(inner)}┐`);
-    lines.push(`│ ${padVisible(style.bold(title), inner - 1)}│`);
+  lines.push(`│ ${padVisible(style.bold(title), inner - 1)}│`);
   lines.push(`├${"─".repeat(inner)}┤`);
   for (const bodyLine of body) {
     lines.push(`│ ${padVisible(bodyLine, inner - 1)}│`);
