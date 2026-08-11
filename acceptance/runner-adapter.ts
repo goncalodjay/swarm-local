@@ -61,7 +61,7 @@ function generatedTestsForFeature(generatedDir: string, featureJson: string): st
     }
     if (featureName(meta.feature_path) !== wanted) continue;
     for (const rel of meta.generated_files) {
-      const testPath = path.join(generatedDir, rel);
+      const testPath = path.resolve(generatedDir, rel);
       if (existsSync(testPath) && testPath.endsWith(".test.ts")) {
         tests.push(testPath);
       }
@@ -89,6 +89,7 @@ function runTests(job: Job): Promise<Response> {
       duration: 0,
     });
   }
+  const irPath = path.resolve(job.feature_json);
   const started = Date.now();
   return new Promise((resolve) => {
     const child: ChildProcess = spawn(
@@ -96,7 +97,7 @@ function runTests(job: Job): Promise<Response> {
       ["--test", ...files],
       {
         cwd: job.work_dir,
-        env: { ...process.env, SWARMFORGE_ACCEPTANCE_IR: job.feature_json },
+        env: { ...process.env, SWARMFORGE_ACCEPTANCE_IR: irPath },
       },
     );
     let output = "";

@@ -24,7 +24,6 @@ export class App {
   selection = 0;
   view: AppView = "dashboard";
   errorMessage = "";
-  attachedSession: string | null = null;
   mode: Mode = "normal";
   focus: FocusTarget = "menu";
   menuFocus = 0;
@@ -157,18 +156,16 @@ export class App {
   async attachSelected(): Promise<void> {
     const agent = this.agents[this.selection];
     if (!agent) return;
-    this.beginAttach(agent.session);
+    this.beginAttach();
     await this.io.attach(agent.session, this.io.socketPath());
     this.resumeAfterDetach();
   }
 
-  beginAttach(session: string): void {
-    this.attachedSession = session;
+  beginAttach(): void {
     this.view = "attached";
   }
 
   resumeAfterDetach(): void {
-    this.attachedSession = null;
     this.view = "dashboard";
     this.poll();
   }
