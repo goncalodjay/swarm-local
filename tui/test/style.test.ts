@@ -3,17 +3,20 @@ import assert from "node:assert/strict";
 import { ansi, statusColor, visibleLength, padVisible, truncateVisible } from "../src/style.ts";
 
 test("ansi styles wrap text in SGR codes", () => {
-  assert.equal(ansi.bold("x"), "\x1b[1mx\x1b[0m");
-  assert.equal(ansi.dim("x"), "\x1b[2mx\x1b[0m");
-  assert.equal(ansi.cyan("x"), "\x1b[36mx\x1b[0m");
+  const expected = process.env.NO_COLOR === undefined
+    ? { bold: "\x1b[1mx\x1b[0m", dim: "\x1b[2mx\x1b[0m", cyan: "\x1b[36mx\x1b[0m" }
+    : { bold: "x", dim: "x", cyan: "x" };
+  assert.equal(ansi.bold("x"), expected.bold);
+  assert.equal(ansi.dim("x"), expected.dim);
+  assert.equal(ansi.cyan("x"), expected.cyan);
 });
 
 test("statusColor maps each status to a style", () => {
-  const plain = (text: string): string => text;
-  assert.notEqual(statusColor("working"), plain);
-  assert.notEqual(statusColor("needs-human"), plain);
-  assert.notEqual(statusColor("finished-idle"), plain);
-  assert.notEqual(statusColor("idle"), plain);
+  const statuses = ["working", "needs-human", "finished-idle", "idle"] as const;
+  const styled = statuses.map((status) => statusColor(status)("x"));
+  assert.deepEqual(styled, process.env.NO_COLOR === undefined
+    ? ["\x1b[33mx\x1b[0m", "\x1b[31mx\x1b[0m", "\x1b[32mx\x1b[0m", "\x1b[2mx\x1b[0m"]
+    : ["x", "x", "x", "x"]);
 });
 
 test("visibleLength ignores ANSI sequences", () => {

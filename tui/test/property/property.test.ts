@@ -3,6 +3,7 @@ import { parseHeaders } from "../../src/handoffs.ts";
 import { parseRoles } from "../../src/roles.ts";
 import { moveSelection } from "../../src/selection.ts";
 import { computeStatus, statusToMarker } from "../../src/status.ts";
+import { padVisible, truncateVisible, visibleLength } from "../../src/style.ts";
 import type { HandoffSnapshot } from "../../src/types.ts";
 import { deterministicIntegers, forAll } from "../helpers/property.ts";
 
@@ -80,5 +81,28 @@ forAll(
   ["working", "needs-human", "finished-idle", "idle"] as const,
   (status) => {
     assert.notEqual(statusToMarker(status), "");
+  },
+);
+
+forAll(
+  "visible padding or truncation reaches its requested width",
+  randomValues.map((value) => ({
+    text: `role-${value}-task-${value % 19}`,
+    width: value % 40,
+  })),
+  ({ text, width }) => {
+    assert.equal(visibleLength(padVisible(text, width)), width);
+  },
+);
+
+forAll(
+  "visible truncation preserves the requested width",
+  randomValues.map((value) => ({
+    text: `a-long-task-name-${value}-${value % 23}`,
+    width: 1 + (value % 40),
+  })),
+  ({ text, width }) => {
+    assert.ok(visibleLength(truncateVisible(text, width)) <= width);
+    if (visibleLength(text) > width) assert.equal(visibleLength(truncateVisible(text, width)), width);
   },
 );
