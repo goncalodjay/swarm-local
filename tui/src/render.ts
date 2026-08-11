@@ -214,7 +214,7 @@ function renderDashboard(model: FrameModel): string[] {
   return lines;
 }
 
-function renderHelpBox(cols: number, focus: FocusTarget): string[] {
+export function renderHelpBox(cols: number, focus: FocusTarget): string[] {
   const width = Math.min(46, cols - 4);
   const inner = width - 2;
   const row = (text: string): string => `│ ${padVisible(text, inner - 1)}│`;
@@ -225,10 +225,10 @@ function renderHelpBox(cols: number, focus: FocusTarget): string[] {
     row("Motion  ↑/↓ · j/k   select"),
     row("Jump    Home/End · g/G"),
     row("Menu    ←/→ · Enter  select"),
-    row("Prefix  Ctrl+k Tab   focus"),
-    row("        Ctrl+k ?    help"),
-    row("        Ctrl+k q    quit"),
-    row("        Esc        cancel"),
+    row("Ctrl+k  Tab   cycle focus"),
+    row("Ctrl+k  ?     help"),
+    row("Ctrl+k  q     quit"),
+    row("Esc     cancel"),
     `├${"─".repeat(inner)}┤`,
     row("Close   q · Esc · ?"),
     `└${"─".repeat(inner)}┘`,

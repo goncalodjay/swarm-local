@@ -4,7 +4,7 @@ import os from "node:os";
 import { App, type TuiIO } from "../tui/src/app.ts";
 import { parseRoles } from "../tui/src/roles.ts";
 import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
-import { frameModel, renderFrame } from "../tui/src/render.ts";
+import { frameModel, renderFrame, renderHelpBox } from "../tui/src/render.ts";
 import type { HandoffSnapshot, Role, TerminalSize } from "../tui/src/types.ts";
 
 const ROLES = [
@@ -27,6 +27,7 @@ export interface World {
   io: TestIO;
   frame: string[];
   rendered: string;
+  helpOverlay: string;
   pendingAttach: Promise<void> | null;
   detach: () => void;
 }
@@ -130,6 +131,7 @@ export function createWorld(): World {
     io: undefined as unknown as TestIO,
     frame: [],
     rendered: "",
+    helpOverlay: "",
     pendingAttach: null,
     detach: (): void => {},
   };
@@ -172,6 +174,7 @@ export function writeUserNote(world: World, role: string): void {
 export function captureFrame(world: World): void {
   world.frame = renderFrame(frameModel(world.app));
   world.rendered = world.frame.join("\n");
+  world.helpOverlay = world.app.helpOpen ? renderHelpBox(world.size.cols, world.app.focus).join("\n") : "";
 }
 
 export interface ParsedRow {

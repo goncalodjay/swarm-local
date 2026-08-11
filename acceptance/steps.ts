@@ -360,7 +360,7 @@ export function createHandlers(): Handler[] {
   handlers.push({
     pattern: /^the help overlay shows "([^"]+)"$/,
     run: (world, _step, _example, [key]) => {
-      assert.ok(world.rendered.includes(key), `help overlay missing ${key}`);
+      assert.ok(world.helpOverlay.includes(key), `help overlay missing ${key}`);
     },
   });
 
