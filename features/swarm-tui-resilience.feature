@@ -1,6 +1,6 @@
-# mutation-stamp: sha256=31dd5906cf5f6cae9f354fa3e2e0f253964565ce22185fc853082072774dfb02
+# mutation-stamp: sha256=6a1be92dcdaaa3305f43a3f4c28b3d254e0c9df9551457f1df0877057afa7ae6
 # acceptance-mutation-manifest-begin
-# {"version":1,"tested_at":"2026-08-11T17:40:45Z","feature_name":"swarm-tui-resilience","feature_path":"features/swarm-tui-resilience.feature","background_hash":"74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b","implementation_hash":"unknown","scenarios":[{"index":2,"name":"swarm-tui-resilience 3: terminal too small","scenario_hash":"9a15ecc3186b817abdcb0bb103f6e245c06aceb3c6d05bfb84c9ac7deda6da5d","mutation_count":6,"result":{"Total":6,"Killed":6,"Survived":0,"Errors":0},"tested_at":"2026-08-11T04:01:06Z"}]}
+# {"version":1,"tested_at":"2026-08-12T20:13:28Z","feature_name":"swarm-tui-resilience","feature_path":"features/swarm-tui-resilience.feature","background_hash":"74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b","implementation_hash":"unknown","scenarios":[{"index":2,"name":"swarm-tui-resilience 3: terminal too small","scenario_hash":"9a15ecc3186b817abdcb0bb103f6e245c06aceb3c6d05bfb84c9ac7deda6da5d","mutation_count":6,"result":{"Total":6,"Killed":6,"Survived":0,"Errors":0},"tested_at":"2026-08-11T04:01:06Z"}]}
 # acceptance-mutation-manifest-end
 
 Feature: swarm-tui-resilience
