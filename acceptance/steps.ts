@@ -404,6 +404,23 @@ export function createHandlers(): Handler[] {
   });
 
   handlers.push({
+    pattern: /^the tmux session (\S+) ends with the message "([^"]+)"$/,
+    run: async (world, _step, _example, [_session, message]) => {
+      assert.ok(world.pendingAttach, "no pending attach");
+      world.endSession(message);
+      await world.pendingAttach;
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^an error message shows "([^"]+)"$/,
+    run: (world, _step, _example, [message]) => {
+      assert.ok(world.rendered.includes(message), `frame missing error message ${message}`);
+    },
+  });
+
+  handlers.push({
     pattern: /^the TUI exits$/,
     run: (world) => {
       assert.ok(world.quitCalls > 0);

@@ -45,6 +45,7 @@ function model(view: FrameModel["view"], agents: AgentState[], selection: number
     agents,
     selection,
     errorMessage: "boom",
+    attachError: null,
     terminalSize: { cols: 120, rows: 40 },
     requiredSize: { cols: 100, rows: 30 },
     socket: "/p/.swarmforge/swarm.sock",
@@ -187,6 +188,12 @@ function stubApp(overrides: Partial<App> = {}, size: TerminalSize = { cols: 120,
 test("frameModel maps the attached view to the dashboard", () => {
   const m = frameModel(stubApp({ view: "attached" }));
   assert.equal(m.view, "dashboard");
+});
+
+test("renderFrame dashboard shows a non-transient attach error banner", () => {
+  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", null));
+  const frame = renderFrame(model("dashboard", agents, 1, { attachError: "server disconnected unexpectedly" })).join("\n");
+  assert.ok(frame.includes("server disconnected unexpectedly"));
 });
 
 test("frameModel passes through roles, agents, selection and error message", () => {

@@ -13,7 +13,7 @@ export interface TuiIO {
   socketPath(): string;
   socketAvailable(): boolean;
   terminalSize(): TerminalSize;
-  attach(session: string, socket: string): Promise<void>;
+  attach(session: string, socket: string): Promise<string | null>;
   restore(): void;
   quit(): void;
 }
@@ -25,9 +25,10 @@ export class App {
   view: AppView = "dashboard";
   errorMessage = "";
   mode: Mode = "normal";
-  focus: FocusTarget = "menu";
+  focus: FocusTarget = "agents";
   menuFocus = 0;
   hint: string | null = null;
+  attachError: string | null = null;
   helpOpen = false;
   io: TuiIO;
 
@@ -157,16 +158,17 @@ export class App {
     const agent = this.agents[this.selection];
     if (!agent) return;
     this.beginAttach();
-    await this.io.attach(agent.session, this.io.socketPath());
-    this.resumeAfterDetach();
+    const reason = await this.io.attach(agent.session, this.io.socketPath());
+    this.resumeAfterDetach(reason);
   }
 
   beginAttach(): void {
     this.view = "attached";
   }
 
-  resumeAfterDetach(): void {
+  resumeAfterDetach(reason: string | null = null): void {
     this.view = "dashboard";
+    this.attachError = reason;
     this.poll();
   }
 

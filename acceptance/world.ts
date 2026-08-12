@@ -30,6 +30,7 @@ export interface World {
   helpOverlay: string;
   pendingAttach: Promise<void> | null;
   detach: () => void;
+  endSession: (message: string) => void;
 }
 
 export class TestIO implements TuiIO {
@@ -59,15 +60,19 @@ export class TestIO implements TuiIO {
     return this.world.size;
   }
 
-  attach(session: string, socket: string): Promise<void> {
+  attach(session: string, socket: string): Promise<string | null> {
     this.world.attachCalls.push({ session, socket });
     if (this.world.autoDetach) {
-      return Promise.resolve();
+      return Promise.resolve(null);
     }
     return new Promise((resolve) => {
       this.world.detach = (): void => {
         this.world.pendingAttach = null;
-        resolve();
+        resolve(null);
+      };
+      this.world.endSession = (message: string): void => {
+        this.world.pendingAttach = null;
+        resolve(message);
       };
       this.world.pendingAttach = Promise.resolve();
     });
@@ -134,6 +139,7 @@ export function createWorld(): World {
     helpOverlay: "",
     pendingAttach: null,
     detach: (): void => {},
+    endSession: (): void => {},
   };
   world.io = new TestIO(world);
   world.app = new App(world.io);
