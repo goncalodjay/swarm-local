@@ -15,7 +15,10 @@ export function formatLogLine(event: string, fields: LogFields): string {
 function formatValue(value: string | number | null): string {
   if (value === null) return "null";
   if (typeof value === "number") return String(value);
-  if (value.includes(" ") || value.includes("=")) return `"${value}"`;
+  if (/[^\w./:-]/.test(value)) {
+    const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n").replaceAll("\r", "\\r");
+    return `"${escaped}"`;
+  }
   return value;
 }
 

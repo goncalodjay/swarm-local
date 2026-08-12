@@ -24,6 +24,12 @@ test("formatLogLine quotes values that contain spaces", () => {
   assert.ok(line.includes('reason="server disconnected unexpectedly"'));
 });
 
+test("formatLogLine keeps multiline and quoted values on one escaped line", () => {
+  const line = formatLogLine("attach_end", { reason: 'first line\nsaid "no"' });
+  assert.equal(line, `${line.split(" ")[0]} attach_end reason="first line\\nsaid \\\"no\\\""`);
+  assert.equal(line.includes("\n"), false);
+});
+
 test("formatLogLine renders numbers, empty strings and null", () => {
   const line = formatLogLine("attach_end", { code: 1, reason: "", extra: null });
   assert.ok(line.includes("code=1"));
