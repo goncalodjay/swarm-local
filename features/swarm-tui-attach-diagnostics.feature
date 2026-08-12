@@ -1,3 +1,8 @@
+# mutation-stamp: sha256=c02bda52e3e7d7c934bbb3584d3eb521c638e15257331df8a738d3385e64d31f
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-08-12T21:51:16Z","feature_name":"swarm-tui-attach-diagnostics","feature_path":"features/swarm-tui-attach-diagnostics.feature","background_hash":"7a925b72fbdf38be1ef001303447a26e1c90f13739252ce306ea7407c19e552b","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 Feature: swarm-tui-attach-diagnostics
 
 Background:
