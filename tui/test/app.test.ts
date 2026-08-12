@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App, type TuiIO } from "../src/app.ts";
 import { menuItemIndex, menuItems } from "../src/menu.ts";
-import type { HandoffSnapshot, Role, TerminalSize } from "../src/types.ts";
+import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../src/types.ts";
 
 function makeRole(role: string, index: number): Role {
   return {
@@ -31,7 +31,8 @@ class FakeIO implements TuiIO {
   attaches: Array<{ session: string; socket: string }> = [];
   restored = false;
   quitCalled = false;
-  private attachResolvers: Array<(reason: string | null) => void> = [];
+  logCalls: Array<{ event: string; fields: LogFields }> = [];
+  private attachResolvers: Array<(result: AttachResult) => void> = [];
 
   readRoles(): Role[] {
     return this.roles;
@@ -53,7 +54,11 @@ class FakeIO implements TuiIO {
     return this.size;
   }
 
-  attach(session: string, socket: string): Promise<string | null> {
+  log(event: string, fields: LogFields): void {
+    this.logCalls.push({ event, fields });
+  }
+
+  attach(session: string, socket: string): Promise<AttachResult> {
     this.attaches.push({ session, socket });
     return new Promise((resolve) => {
       this.attachResolvers.push(resolve);
@@ -61,12 +66,12 @@ class FakeIO implements TuiIO {
   }
 
   detach(): void {
-    for (const resolve of this.attachResolvers) resolve(null);
+    for (const resolve of this.attachResolvers) resolve({ code: 0, reason: "" });
     this.attachResolvers = [];
   }
 
   endSession(message: string): void {
-    for (const resolve of this.attachResolvers) resolve(message);
+    for (const resolve of this.attachResolvers) resolve({ code: 1, reason: message });
     this.attachResolvers = [];
   }
 
@@ -180,6 +185,84 @@ test("a clean detach clears a previous attach error", async () => {
   io.detach();
   await attaching;
   assert.equal(app.attachError, null);
+});
+
+test("start logs a tui_start event", () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  assert.ok(io.logCalls.some((c) => c.event === "tui_start"));
+});
+
+test("attach logs attach_start and attach_end events", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  io.logCalls = [];
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  io.endSession("server disconnected unexpectedly");
+  await attaching;
+  const attachStart = io.logCalls.find((c) => c.event === "attach_start");
+  const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
+  assert.ok(attachStart, "missing attach_start");
+  assert.equal(attachStart.fields.session, "swarmforge-coder");
+  assert.equal(attachStart.fields.socket, "/tmp/swarmforge/test.sock");
+  assert.ok(attachEnd, "missing attach_end");
+  assert.equal(attachEnd.fields.reason, "server disconnected unexpectedly");
+  assert.equal(attachEnd.fields.code, 1);
+});
+
+test("attach_end with a clean detach logs an empty reason", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  io.logCalls = [];
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  io.detach();
+  await attaching;
+  const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
+  assert.ok(attachEnd, "missing attach_end");
+  assert.equal(attachEnd.fields.reason, "");
+});
+
+test("esc clears a persistent attach error", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  app.attachError = "server disconnected unexpectedly";
+  await app.press("esc");
+  assert.equal(app.attachError, null);
+});
+
+test("attach start clears a previous attach error", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  app.selection = 1;
+  app.focus = "agents";
+  app.attachError = "server disconnected unexpectedly";
+  const attaching = app.attachSelected();
+  assert.equal(app.attachError, null);
+  io.detach();
+  await attaching;
+  assert.equal(app.attachError, null);
+});
+
+test("poll logs a socket_check event on the transition to unavailable", () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  io.logCalls = [];
+  io.socketOk = false;
+  app.poll();
+  assert.ok(
+    io.logCalls.some((c) => c.event === "socket_check" && c.fields.status === "unavailable"),
+    "missing socket_check unavailable",
+  );
 });
 
 test("poll refreshes a newly landed in-process handoff", () => {

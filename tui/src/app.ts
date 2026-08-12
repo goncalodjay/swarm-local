@@ -1,4 +1,4 @@
-import type { AgentState, AppView, FocusTarget, HandoffSnapshot, Key, Mode, Role, TerminalSize } from "./types.ts";
+import type { AgentState, AppView, AttachResult, FocusTarget, HandoffSnapshot, Key, LogFields, Mode, Role, TerminalSize } from "./types.ts";
 import { moveSelection } from "./selection.ts";
 import { isDisabledMenuItem, menuItems, moveMenuFocus } from "./menu.ts";
 import { agentState } from "./status.ts";
@@ -13,7 +13,8 @@ export interface TuiIO {
   socketPath(): string;
   socketAvailable(): boolean;
   terminalSize(): TerminalSize;
-  attach(session: string, socket: string): Promise<string | null>;
+  attach(session: string, socket: string): Promise<AttachResult>;
+  log(event: string, fields: LogFields): void;
   restore(): void;
   quit(): void;
 }
@@ -31,12 +32,14 @@ export class App {
   attachError: string | null = null;
   helpOpen = false;
   io: TuiIO;
+  private lastSocketAvailable: boolean | null = null;
 
   constructor(io: TuiIO) {
     this.io = io;
   }
 
   start(): void {
+    this.io.log("tui_start", {});
     this.checkSocket();
     if (this.view === "error") return;
     this.roles = this.io.readRoles();
@@ -50,11 +53,16 @@ export class App {
 
   checkSocket(): void {
     if (this.view === "attached") return;
-    if (!this.io.socketAvailable()) {
+    const available = this.io.socketAvailable();
+    if (available === this.lastSocketAvailable) return;
+    this.lastSocketAvailable = available;
+    if (!available) {
       this.view = "error";
       this.errorMessage = "The swarm socket is unavailable.";
-    } else if (this.view === "error") {
-      this.view = "dashboard";
+      this.io.log("socket_check", { status: "unavailable" });
+    } else {
+      this.io.log("socket_check", { status: "available" });
+      if (this.view === "error") this.view = "dashboard";
     }
   }
 
@@ -125,6 +133,9 @@ export class App {
       case "quit":
         this.quit();
         break;
+      case "esc":
+        this.attachError = null;
+        break;
       default:
         break;
     }
@@ -157,18 +168,21 @@ export class App {
   async attachSelected(): Promise<void> {
     const agent = this.agents[this.selection];
     if (!agent) return;
+    this.attachError = null;
+    this.io.log("attach_start", { role: agent.role, session: agent.session, socket: this.io.socketPath() });
     this.beginAttach();
-    const reason = await this.io.attach(agent.session, this.io.socketPath());
-    this.resumeAfterDetach(reason);
+    const result = await this.io.attach(agent.session, this.io.socketPath());
+    this.io.log("attach_end", { role: agent.role, session: agent.session, code: result.code, reason: result.reason });
+    this.resumeAfterDetach(result);
   }
 
   beginAttach(): void {
     this.view = "attached";
   }
 
-  resumeAfterDetach(reason: string | null = null): void {
+  resumeAfterDetach(result: AttachResult): void {
     this.view = "dashboard";
-    this.attachError = reason;
+    this.attachError = result.reason === "" ? null : result.reason;
     this.poll();
   }
 

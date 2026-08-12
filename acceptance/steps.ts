@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import {
   cleanupWorld,
@@ -12,6 +12,7 @@ import {
   findAgentRow,
   parseAgentRow,
   markerForName,
+  logLines,
   type World,
 } from "./world.ts";
 import type { StepHandlerDef } from "./runtime.ts";
@@ -421,6 +422,95 @@ export function createHandlers(): Handler[] {
     pattern: /^an error message shows "([^"]+)"$/,
     run: (world, _step, _example, [message]) => {
       assert.ok(world.rendered.includes(message), `frame missing error message ${message}`);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the file (\S+) exists$/,
+    run: (world, _step, _example, [file]) => {
+      const expected = path.isAbsolute(file) ? file : path.join(world.root, file);
+      assert.ok(existsSync(expected), `expected file ${expected} to exist`);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the log contains a tui_start event$/,
+    run: (world) => {
+      assert.ok(logLines(world).some((line) => line.includes("tui_start")), "log missing tui_start event");
+    },
+  });
+
+  handlers.push({
+    pattern: /^the log contains an attach_start event for session (\S+)$/,
+    run: (world, _step, _example, [session]) => {
+      assert.ok(
+        logLines(world).some((line) => line.includes("attach_start") && line.includes(`session=${session}`)),
+        `log missing attach_start for ${session}`,
+      );
+    },
+  });
+
+  handlers.push({
+    pattern: /^the log contains an attach_end event for session (\S+) with reason ""$/,
+    run: (world, _step, _example, [session]) => {
+      assert.ok(
+        logLines(world).some(
+          (line) => line.includes("attach_end") && line.includes(`session=${session}`) && line.includes("reason=") && !line.includes('reason="'),
+        ),
+        `log missing attach_end with empty reason for ${session}`,
+      );
+    },
+  });
+
+  handlers.push({
+    pattern: /^the log contains an attach_end event for session (\S+) with reason "([^"]+)"$/,
+    run: (world, _step, _example, [session, message]) => {
+      assert.ok(
+        logLines(world).some((line) => line.includes("attach_end") && line.includes(`session=${session}`) && line.includes(`reason="${message}"`)),
+        `log missing attach_end with reason ${message} for ${session}`,
+      );
+    },
+  });
+
+  handlers.push({
+    pattern: /^the log contains a socket_check event reporting unavailable$/,
+    run: (world) => {
+      assert.ok(
+        logLines(world).some((line) => line.includes("socket_check") && line.includes("unavailable")),
+        "log missing socket_check unavailable event",
+      );
+    },
+  });
+
+  handlers.push({
+    pattern: /^the dashboard shows the error "([^"]+)"$/,
+    run: (world, _step, _example, [message]) => {
+      assert.ok(world.rendered.includes(message), `dashboard missing error ${message}`);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the error banner remains after the next poll$/,
+    run: (world) => {
+      assert.ok(world.app.attachError, "no attach error to keep");
+      world.app.poll();
+      captureFrame(world);
+      assert.ok(world.rendered.includes(world.app.attachError as string), "error banner lost after poll");
+    },
+  });
+
+  handlers.push({
+    pattern: /^an attach error "([^"]+)" is displayed$/,
+    run: (world, _step, _example, [message]) => {
+      world.app.attachError = message;
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the dashboard does not show the error "([^"]+)"$/,
+    run: (world, _step, _example, [message]) => {
+      assert.ok(!world.rendered.includes(message), `dashboard still shows error ${message}`);
     },
   });
 
