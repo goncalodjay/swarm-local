@@ -47,3 +47,11 @@ Scenario: swarm-tui-resilience 5: missing or malformed agent state
   When the TUI renders the agents panel
   Then the coder row shows a blank status
   And the TUI does not crash
+
+# swarm-tui-resilience 6: agent session ends unexpectedly while attached
+Scenario: swarm-tui-resilience 6: agent session ends unexpectedly while attached
+  Given a running swarm with the configured roles
+  And the TUI is attached to the tmux session swarmforge-coder
+  When the tmux session swarmforge-coder ends with the message "server disconnected unexpectedly"
+  Then the TUI renders the dashboard
+  And an error message shows "server disconnected unexpectedly"
