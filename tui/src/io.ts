@@ -3,8 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseRoles } from "./roles.ts";
 import { readHandoffSnapshot } from "./handoffs.ts";
+import { appendLogEntry, logPathForRoot } from "./log.ts";
 import type { TuiIO } from "./app.ts";
-import type { HandoffSnapshot, Role, TerminalSize } from "./types.ts";
+import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "./types.ts";
 
 export function projectRoot(cwd: string): string {
   let dir = path.resolve(cwd);
@@ -24,6 +25,7 @@ export function readSocketPath(root: string): string {
 
 export class FileSystemTuiIO implements TuiIO {
   root: string;
+  private logWarned = false;
 
   constructor(root: string) {
     this.root = root;
@@ -51,7 +53,7 @@ export class FileSystemTuiIO implements TuiIO {
     return { cols: process.stdout.columns || 0, rows: process.stdout.rows || 0 };
   }
 
-  attach(session: string, socket: string): Promise<string | null> {
+  attach(session: string, socket: string): Promise<AttachResult> {
     return new Promise((resolve, reject) => {
       const child: ChildProcess = spawn("tmux", ["-S", socket, "attach", "-t", session], {
         stdio: ["inherit", "inherit", "pipe"],
@@ -63,14 +65,21 @@ export class FileSystemTuiIO implements TuiIO {
       });
       child.on("error", reject);
       child.on("exit", (code) => {
-        const message = stderr.trim();
-        if (code === 0 && message === "") {
-          resolve(null);
+        const reason = stderr.trim();
+        if (code === 0 && reason === "") {
+          resolve({ code, reason: "" });
           return;
         }
-        resolve(message || `tmux exited with status ${code ?? "unknown"}`);
+        resolve({ code, reason: reason || `tmux exited with status ${code ?? "unknown"}` });
       });
     });
+  }
+
+  log(event: string, fields: LogFields): void {
+    if (!appendLogEntry(logPathForRoot(this.root), event, fields) && !this.logWarned) {
+      this.logWarned = true;
+      process.stderr.write("swarm-tui: warning: unable to write log to .swarmforge/logs/tui.log\n");
+    }
   }
 
   restore(): void {

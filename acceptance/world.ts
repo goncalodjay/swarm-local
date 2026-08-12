@@ -4,8 +4,9 @@ import os from "node:os";
 import { App, type TuiIO } from "../tui/src/app.ts";
 import { parseRoles } from "../tui/src/roles.ts";
 import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
+import { appendLogEntry, logPathForRoot } from "../tui/src/log.ts";
 import { frameModel, renderFrame, renderHelpBox } from "../tui/src/render.ts";
-import type { HandoffSnapshot, Role, TerminalSize } from "../tui/src/types.ts";
+import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../tui/src/types.ts";
 
 const ROLES = [
   { role: "specifier", worktreeName: "master", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", mode: "task" },
@@ -28,7 +29,7 @@ export interface World {
   frame: string[];
   rendered: string;
   helpOverlay: string;
-  pendingAttach: Promise<string | null> | null;
+  pendingAttach: Promise<AttachResult> | null;
   detach: () => void;
   endSession: (message: string) => void;
 }
@@ -60,21 +61,25 @@ export class TestIO implements TuiIO {
     return this.world.size;
   }
 
-  attach(session: string, socket: string): Promise<string | null> {
+  attach(session: string, socket: string): Promise<AttachResult> {
     this.world.attachCalls.push({ session, socket });
     if (this.world.autoDetach) {
-      return Promise.resolve(null);
+      return Promise.resolve({ code: 0, reason: "" });
     }
-    const pending = new Promise<string | null>((resolve) => {
+    const pending = new Promise<AttachResult>((resolve) => {
       this.world.detach = (): void => {
-        resolve(null);
+        resolve({ code: 0, reason: "" });
       };
       this.world.endSession = (message: string): void => {
-        resolve(message);
+        resolve({ code: 1, reason: message });
       };
     });
     this.world.pendingAttach = pending;
     return pending;
+  }
+
+  log(event: string, fields: LogFields): void {
+    appendLogEntry(logPathForRoot(this.world.root), event, fields);
   }
 
   restore(): void {
@@ -221,4 +226,13 @@ export function markerForName(name: string): string {
     default:
       return " ";
   }
+}
+
+export function readLog(world: World): string {
+  const file = logPathForRoot(world.root);
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
+}
+
+export function logLines(world: World): string[] {
+  return readLog(world).split("\n").filter((line) => line !== "");
 }

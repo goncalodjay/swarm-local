@@ -42,6 +42,13 @@ export type Mode = "normal" | "prefix";
 
 export type FocusTarget = "agents" | "detail" | "menu";
 
+export interface AttachResult {
+  code: number | null;
+  reason: string;
+}
+
+export type LogFields = Record<string, string | number | null>;
+
 export type Key =
   | "up"
   | "down"
