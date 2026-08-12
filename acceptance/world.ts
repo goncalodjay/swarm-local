@@ -28,7 +28,7 @@ export interface World {
   frame: string[];
   rendered: string;
   helpOverlay: string;
-  pendingAttach: Promise<void> | null;
+  pendingAttach: Promise<string | null> | null;
   detach: () => void;
   endSession: (message: string) => void;
 }
@@ -65,17 +65,16 @@ export class TestIO implements TuiIO {
     if (this.world.autoDetach) {
       return Promise.resolve(null);
     }
-    return new Promise((resolve) => {
+    const pending = new Promise<string | null>((resolve) => {
       this.world.detach = (): void => {
-        this.world.pendingAttach = null;
         resolve(null);
       };
       this.world.endSession = (message: string): void => {
-        this.world.pendingAttach = null;
         resolve(message);
       };
-      this.world.pendingAttach = Promise.resolve();
     });
+    this.world.pendingAttach = pending;
+    return pending;
   }
 
   restore(): void {

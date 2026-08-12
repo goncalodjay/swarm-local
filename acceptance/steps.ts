@@ -397,8 +397,10 @@ export function createHandlers(): Handler[] {
     pattern: /^the tmux client detaches$/,
     run: async (world) => {
       assert.ok(world.pendingAttach, "no pending attach");
+      const pendingAttach = world.pendingAttach;
       world.detach();
-      await world.pendingAttach;
+      await pendingAttach;
+      world.pendingAttach = null;
       captureFrame(world);
     },
   });
@@ -407,8 +409,10 @@ export function createHandlers(): Handler[] {
     pattern: /^the tmux session (\S+) ends with the message "([^"]+)"$/,
     run: async (world, _step, _example, [_session, message]) => {
       assert.ok(world.pendingAttach, "no pending attach");
+      const pendingAttach = world.pendingAttach;
       world.endSession(message);
-      await world.pendingAttach;
+      await pendingAttach;
+      world.pendingAttach = null;
       captureFrame(world);
     },
   });
