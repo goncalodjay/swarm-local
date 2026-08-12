@@ -13,6 +13,7 @@ export interface FrameModel {
   agents: AgentState[];
   selection: number;
   errorMessage: string;
+  attachError: string | null;
   terminalSize: TerminalSize;
   requiredSize: TerminalSize;
   socket: string;
@@ -30,6 +31,7 @@ export function frameModel(app: App): FrameModel {
     agents: app.agents,
     selection: app.selection,
     errorMessage: app.errorMessage,
+    attachError: app.attachError,
     terminalSize: app.io.terminalSize(),
     requiredSize: REQUIRED_SIZE,
     socket: app.io.socketPath(),
@@ -208,6 +210,9 @@ function renderDashboard(model: FrameModel): string[] {
   }
 
   lines.push(dividerRow(cols, "┴"));
+  if (model.attachError) {
+    lines.push(`│ ${padVisible(style.bold(style.red(model.attachError)), inner - 1)}│`);
+  }
   lines.push(`│ ${padVisible(style.dim(renderLegend()), inner - 1)}│`);
   lines.push(`│ ${padVisible(renderFooter(model.mode, model.hint, model.helpOpen), inner - 1)}│`);
   lines.push(bottomBorder(cols));

@@ -61,6 +61,7 @@ Examples:
 # swarm-tui-dashboard 6: enter attaches to the selected agent
 Scenario: swarm-tui-dashboard 6: enter attaches to the selected agent
   Given the selection is on coder
+  And the focus is on agents
   When I press enter
   Then the terminal attaches to the tmux session swarmforge-coder on the swarm socket
 

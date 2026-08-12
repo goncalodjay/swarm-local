@@ -46,6 +46,9 @@ intelligence in the footer, and graceful handling of unknown keys.
 ### Focus model
 
 - Three focus targets: **agents panel**, **detail pane**, **menu bar**.
+- The TUI starts with focus on the **agents panel**. This makes the normal-mode
+  footer hint `"Enter attach"` true immediately on launch; the user can press
+  `Enter` as soon as the dashboard appears.
 - The detail pane and menu bar are read-only/navigation targets in F2; their
   content is still rendered the same way.
 - Only the agents panel can be the source of an `Enter` attach. If the menu bar

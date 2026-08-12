@@ -32,8 +32,13 @@ Scenario: swarm-tui-navigation 3: escape cancels prefix mode
   When I press esc
   Then the footer shows "Ctrl+k menu"
 
-# swarm-tui-navigation 4: tab cycles focus through panels
-Scenario Outline: swarm-tui-navigation 4: tab cycles focus through panels
+# swarm-tui-navigation 4: startup focus is on the agents panel
+Scenario: swarm-tui-navigation 4: startup focus is on the agents panel
+  When the TUI starts
+  Then the focus is on agents
+
+# swarm-tui-navigation 5: tab cycles focus through panels
+Scenario Outline: swarm-tui-navigation 5: tab cycles focus through panels
   Given the TUI is showing the dashboard
   And I press ctrl+k
   When I press tab <presses> times
@@ -41,13 +46,13 @@ Scenario Outline: swarm-tui-navigation 4: tab cycles focus through panels
 
 Examples:
   | presses | panel   |
-  | 1       | agents  |
-  | 2       | detail  |
-  | 3       | menu    |
-  | 4       | agents  |
+  | 1       | detail  |
+  | 2       | menu    |
+  | 3       | agents  |
+  | 4       | detail  |
 
-# swarm-tui-navigation 5: vim motions move selection
-Scenario Outline: swarm-tui-navigation 5: vim motions move selection
+# swarm-tui-navigation 6: vim motions move selection
+Scenario Outline: swarm-tui-navigation 6: vim motions move selection
   Given the selection is on <from_agent>
   When I press <key>
   Then the selection moves to <to_agent>
@@ -59,8 +64,8 @@ Examples:
   | architect  | j   | architect |
   | specifier  | k   | specifier |
 
-# swarm-tui-navigation 6: jump to first and last agent
-Scenario Outline: swarm-tui-navigation 6: jump to first and last agent
+# swarm-tui-navigation 7: jump to first and last agent
+Scenario Outline: swarm-tui-navigation 7: jump to first and last agent
   Given the selection is on <from_agent>
   When I press <key>
   Then the selection moves to <to_agent>
@@ -72,8 +77,8 @@ Examples:
   | specifier  | End  | architect |
   | specifier  | G    | architect |
 
-# swarm-tui-navigation 7: menu bar navigation wraps
-Scenario Outline: swarm-tui-navigation 7: menu bar navigation wraps
+# swarm-tui-navigation 8: menu bar navigation wraps
+Scenario Outline: swarm-tui-navigation 8: menu bar navigation wraps
   Given the TUI is showing the dashboard
   And the focus is on menu
   And the menu focus is on <from_item>
@@ -87,8 +92,8 @@ Examples:
   | costs      | right | dashboard  |
   | specifier  | left  | dashboard  |
 
-# swarm-tui-navigation 8: disabled menu item shows hint
-Scenario Outline: swarm-tui-navigation 8: disabled menu item shows hint
+# swarm-tui-navigation 9: disabled menu item shows hint
+Scenario Outline: swarm-tui-navigation 9: disabled menu item shows hint
   Given the TUI is showing the dashboard
   And the focus is on menu
   And the menu focus is on <item>
@@ -100,8 +105,8 @@ Examples:
   | logs  |
   | costs |
 
-# swarm-tui-navigation 9: help overlay opens and closes
-Scenario: swarm-tui-navigation 9: help overlay opens and closes
+# swarm-tui-navigation 10: help overlay opens and closes
+Scenario: swarm-tui-navigation 10: help overlay opens and closes
   Given the TUI is showing the dashboard
   When I press ctrl+k
   And I press ?
@@ -109,8 +114,8 @@ Scenario: swarm-tui-navigation 9: help overlay opens and closes
   When I press q
   Then the help overlay is closed
 
-# swarm-tui-navigation 10: help overlay lists keybindings
-Scenario Outline: swarm-tui-navigation 10: help overlay lists keybindings
+# swarm-tui-navigation 11: help overlay lists keybindings
+Scenario Outline: swarm-tui-navigation 11: help overlay lists keybindings
   Given the TUI is showing the dashboard
   And I press ctrl+k
   And I press ?

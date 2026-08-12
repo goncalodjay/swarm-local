@@ -31,7 +31,7 @@ class FakeIO implements TuiIO {
   attaches: Array<{ session: string; socket: string }> = [];
   restored = false;
   quitCalled = false;
-  private attachResolvers: Array<() => void> = [];
+  private attachResolvers: Array<(reason: string | null) => void> = [];
 
   readRoles(): Role[] {
     return this.roles;
@@ -53,7 +53,7 @@ class FakeIO implements TuiIO {
     return this.size;
   }
 
-  attach(session: string, socket: string): Promise<void> {
+  attach(session: string, socket: string): Promise<string | null> {
     this.attaches.push({ session, socket });
     return new Promise((resolve) => {
       this.attachResolvers.push(resolve);
@@ -61,7 +61,12 @@ class FakeIO implements TuiIO {
   }
 
   detach(): void {
-    for (const resolve of this.attachResolvers) resolve();
+    for (const resolve of this.attachResolvers) resolve(null);
+    this.attachResolvers = [];
+  }
+
+  endSession(message: string): void {
+    for (const resolve of this.attachResolvers) resolve(message);
     this.attachResolvers = [];
   }
 
@@ -79,6 +84,13 @@ test("start lists configured roles in order", () => {
   const app = new App(io);
   app.start();
   assert.deepEqual(app.roles.map((r) => r.role), ["specifier", "coder", "refactorer", "architect"]);
+});
+
+test("startup focus is on the agents panel", () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  assert.equal(app.focus, "agents");
 });
 
 test("start with no socket shows error view", () => {
@@ -138,6 +150,36 @@ test("enter attaches to the selected agent session on the socket", async () => {
   await attaching;
   assert.deepEqual(io.attaches, [{ session: "swarmforge-coder", socket: "/tmp/swarmforge/test.sock" }]);
   assert.equal(app.view, "dashboard");
+});
+
+test("an unexpected session end returns to the dashboard with a non-transient error", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  assert.equal(app.view, "attached");
+  io.endSession("server disconnected unexpectedly");
+  await attaching;
+  assert.equal(app.view, "dashboard");
+  assert.equal(app.attachError, "server disconnected unexpectedly");
+});
+
+test("a clean detach clears a previous attach error", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  app.selection = 1;
+  app.focus = "agents";
+  let attaching = app.press("enter");
+  io.endSession("server disconnected unexpectedly");
+  await attaching;
+  assert.equal(app.attachError, "server disconnected unexpectedly");
+  attaching = app.press("enter");
+  io.detach();
+  await attaching;
+  assert.equal(app.attachError, null);
 });
 
 test("poll refreshes a newly landed in-process handoff", () => {
@@ -208,9 +250,6 @@ test("tab in prefix mode cycles focus through the panels", async () => {
   const io = new FakeIO();
   const app = new App(io);
   app.start();
-  assert.equal(app.focus, "menu");
-  await app.press("ctrl+k");
-  await app.press("tab");
   assert.equal(app.focus, "agents");
   await app.press("ctrl+k");
   await app.press("tab");
@@ -218,6 +257,9 @@ test("tab in prefix mode cycles focus through the panels", async () => {
   await app.press("ctrl+k");
   await app.press("tab");
   assert.equal(app.focus, "menu");
+  await app.press("ctrl+k");
+  await app.press("tab");
+  assert.equal(app.focus, "agents");
 });
 
 test("vim motions move selection regardless of focus", async () => {

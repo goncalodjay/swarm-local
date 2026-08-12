@@ -84,6 +84,11 @@ reports/logs tabs belong to F4, not F1.
   vs required size; recovers automatically on resize.
 - Missing or malformed agent state files → that agent renders with a blank
   status; the TUI does not crash.
+- Agent tmux session ends unexpectedly while attached (e.g. "server
+  disconnected unexpectedly") → the TUI returns to the dashboard and shows a
+  non-transient error message with the session termination reason, instead of
+  silently resuming. The underlying session-lifecycle cause is out of the TUI's
+  scope and is tracked separately.
 
 ## Non-functional constraints
 
