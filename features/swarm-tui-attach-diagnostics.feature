@@ -61,3 +61,25 @@ Scenario: swarm-tui-attach-diagnostics 8: successful attach clears previous erro
   And the focus is on agents
   When I press enter
   Then the dashboard does not show the error "server disconnected unexpectedly"
+
+# swarm-tui-attach-diagnostics 9: generic exit with missing session reports root cause
+Scenario: swarm-tui-attach-diagnostics 9: generic exit with missing session reports root cause
+  Given the TUI is attached to the tmux session swarmforge-coder
+  When the tmux client exits with code 1 and empty stderr and the session no longer exists
+  Then the log contains an attach_end event for session swarmforge-coder with reason "tmux session swarmforge-coder no longer exists"
+  And the log contains an attach_end event for session swarmforge-coder with field session_alive="false"
+
+# swarm-tui-attach-diagnostics 10: generic exit with unavailable socket reports root cause
+Scenario: swarm-tui-attach-diagnostics 10: generic exit with unavailable socket reports root cause
+  Given the TUI is attached to the tmux session swarmforge-coder
+  When the tmux client exits with code 1 and empty stderr and the swarm socket is unavailable
+  Then the log contains an attach_end event for session swarmforge-coder with reason matching "tmux socket .* is unavailable"
+  And the log contains an attach_end event for session swarmforge-coder with field socket_available="false"
+
+# swarm-tui-attach-diagnostics 11: generic exit with alive session reports client exit status
+Scenario: swarm-tui-attach-diagnostics 11: generic exit with alive session reports client exit status
+  Given the TUI is attached to the tmux session swarmforge-coder
+  When the tmux client exits with code 1 and empty stderr and the session still exists
+  Then the log contains an attach_end event for session swarmforge-coder with reason "tmux client exited with status 1"
+  And the log contains an attach_end event for session swarmforge-coder with field session_alive="true"
+  And the log contains an attach_end event for session swarmforge-coder with field socket_available="true"

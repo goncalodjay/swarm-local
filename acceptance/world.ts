@@ -19,6 +19,7 @@ export interface World {
   root: string;
   socket: string;
   socketOk: boolean;
+  sessionAlive: boolean;
   size: TerminalSize;
   autoDetach: boolean;
   attachCalls: Array<{ session: string; socket: string }>;
@@ -30,6 +31,7 @@ export interface World {
   rendered: string;
   helpOverlay: string;
   pendingAttach: Promise<AttachResult> | null;
+  resolveAttach: (result: AttachResult) => void;
   detach: () => void;
   endSession: (message: string) => void;
 }
@@ -67,6 +69,9 @@ export class TestIO implements TuiIO {
       return Promise.resolve({ code: 0, reason: "" });
     }
     const pending = new Promise<AttachResult>((resolve) => {
+      this.world.resolveAttach = (result: AttachResult): void => {
+        resolve(result);
+      };
       this.world.detach = (): void => {
         resolve({ code: 0, reason: "" });
       };
@@ -76,6 +81,10 @@ export class TestIO implements TuiIO {
     });
     this.world.pendingAttach = pending;
     return pending;
+  }
+
+  sessionExists(session: string): Promise<boolean> {
+    return Promise.resolve(this.world.sessionAlive);
   }
 
   log(event: string, fields: LogFields): void {
@@ -131,6 +140,7 @@ export function createWorld(): World {
     root,
     socket,
     socketOk: false,
+    sessionAlive: true,
     size: { cols: 120, rows: 40 },
     autoDetach: true,
     attachCalls: [],
@@ -142,6 +152,7 @@ export function createWorld(): World {
     rendered: "",
     helpOverlay: "",
     pendingAttach: null,
+    resolveAttach: (): void => {},
     detach: (): void => {},
     endSession: (): void => {},
   };

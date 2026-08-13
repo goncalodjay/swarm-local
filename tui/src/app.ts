@@ -1,4 +1,5 @@
 import type { AgentState, AppView, AttachResult, FocusTarget, HandoffSnapshot, Key, LogFields, Mode, Role, TerminalSize } from "./types.ts";
+import { diagnoseAttachEnd } from "./attach.ts";
 import { moveSelection } from "./selection.ts";
 import { isDisabledMenuItem, menuItems, moveMenuFocus } from "./menu.ts";
 import { agentState } from "./status.ts";
@@ -14,6 +15,7 @@ export interface TuiIO {
   socketAvailable(): boolean;
   terminalSize(): TerminalSize;
   attach(session: string, socket: string): Promise<AttachResult>;
+  sessionExists(session: string): Promise<boolean>;
   log(event: string, fields: LogFields): void;
   restore(): void;
   quit(): void;
@@ -172,8 +174,16 @@ export class App {
     this.io.log("attach_start", { role: agent.role, session: agent.session, socket: this.io.socketPath() });
     this.beginAttach();
     const result = await this.io.attach(agent.session, this.io.socketPath());
-    this.io.log("attach_end", { role: agent.role, session: agent.session, code: result.code, reason: result.reason });
-    this.resumeAfterDetach(result);
+    const diagnosis = await diagnoseAttachEnd(result, agent.session, this.io);
+    this.io.log("attach_end", {
+      role: agent.role,
+      session: agent.session,
+      code: result.code,
+      reason: diagnosis.reason,
+      socket_available: diagnosis.socketAvailable,
+      session_alive: diagnosis.sessionAlive,
+    });
+    this.resumeAfterDetach({ code: result.code, reason: diagnosis.reason });
   }
 
   beginAttach(): void {
