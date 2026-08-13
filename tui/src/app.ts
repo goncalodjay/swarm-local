@@ -1,4 +1,5 @@
-import type { AgentState, AppView, AttachDiagnosis, AttachResult, FocusTarget, HandoffSnapshot, Key, LogFields, Mode, Role, TerminalSize } from "./types.ts";
+import type { AgentState, AppView, AttachResult, FocusTarget, HandoffSnapshot, Key, LogFields, Mode, Role, TerminalSize } from "./types.ts";
+import { diagnoseAttachEnd } from "./attach.ts";
 import { moveSelection } from "./selection.ts";
 import { isDisabledMenuItem, menuItems, moveMenuFocus } from "./menu.ts";
 import { agentState } from "./status.ts";
@@ -173,7 +174,7 @@ export class App {
     this.io.log("attach_start", { role: agent.role, session: agent.session, socket: this.io.socketPath() });
     this.beginAttach();
     const result = await this.io.attach(agent.session, this.io.socketPath());
-    const diagnosis = await this.diagnoseAttachEnd(result, agent.session);
+    const diagnosis = await diagnoseAttachEnd(result, agent.session, this.io);
     this.io.log("attach_end", {
       role: agent.role,
       session: agent.session,
@@ -183,25 +184,6 @@ export class App {
       session_alive: diagnosis.sessionAlive,
     });
     this.resumeAfterDetach({ code: result.code, reason: diagnosis.reason });
-  }
-
-  async diagnoseAttachEnd(result: AttachResult, session: string): Promise<AttachDiagnosis> {
-    if (result.reason === "" && result.code !== 0) {
-      const socketAvailable = this.io.socketAvailable();
-      if (!socketAvailable) {
-        return { reason: `tmux socket ${this.io.socketPath()} is unavailable`, socketAvailable: false, sessionAlive: false };
-      }
-      try {
-        const sessionAlive = await this.io.sessionExists(session);
-        if (!sessionAlive) {
-          return { reason: `tmux session ${session} no longer exists`, socketAvailable: true, sessionAlive: false };
-        }
-        return { reason: `tmux client exited with status ${result.code ?? "unknown"}`, socketAvailable: true, sessionAlive: true };
-      } catch (err) {
-        return { reason: (err as Error).message, socketAvailable: null, sessionAlive: null };
-      }
-    }
-    return { reason: result.reason, socketAvailable: null, sessionAlive: null };
   }
 
   beginAttach(): void {
