@@ -27,6 +27,7 @@ class FakeIO implements TuiIO {
   snapshots = new Map<string, HandoffSnapshot>();
   socket = "/tmp/swarmforge/test.sock";
   socketOk = true;
+  sessionAlive = true;
   size: TerminalSize = { cols: 120, rows: 40 };
   attaches: Array<{ session: string; socket: string }> = [];
   restored = false;
@@ -65,6 +66,10 @@ class FakeIO implements TuiIO {
     });
   }
 
+  sessionExists(_session: string): Promise<boolean> {
+    return Promise.resolve(this.sessionAlive);
+  }
+
   detach(): void {
     for (const resolve of this.attachResolvers) resolve({ code: 0, reason: "" });
     this.attachResolvers = [];
@@ -72,6 +77,11 @@ class FakeIO implements TuiIO {
 
   endSession(message: string): void {
     for (const resolve of this.attachResolvers) resolve({ code: 1, reason: message });
+    this.attachResolvers = [];
+  }
+
+  endGeneric(code: number): void {
+    for (const resolve of this.attachResolvers) resolve({ code, reason: "" });
     this.attachResolvers = [];
   }
 
@@ -227,6 +237,59 @@ test("attach_end with a clean detach logs an empty reason", async () => {
   const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
   assert.ok(attachEnd, "missing attach_end");
   assert.equal(attachEnd.fields.reason, "");
+});
+
+test("generic non-zero exit with missing session logs the session root cause", async () => {
+  const io = new FakeIO();
+  io.sessionAlive = false;
+  const app = new App(io);
+  app.start();
+  io.logCalls = [];
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  io.endGeneric(1);
+  await attaching;
+  const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
+  assert.ok(attachEnd, "missing attach_end");
+  assert.equal(attachEnd.fields.reason, "tmux session swarmforge-coder no longer exists");
+  assert.equal(attachEnd.fields.socket_available, true);
+  assert.equal(attachEnd.fields.session_alive, false);
+});
+
+test("generic non-zero exit with unavailable socket logs the socket root cause", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  io.socketOk = false;
+  io.logCalls = [];
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  io.endGeneric(1);
+  await attaching;
+  const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
+  assert.ok(attachEnd, "missing attach_end");
+  assert.equal(attachEnd.fields.reason, "tmux socket /tmp/swarmforge/test.sock is unavailable");
+  assert.equal(attachEnd.fields.socket_available, false);
+  assert.equal(attachEnd.fields.session_alive, false);
+});
+
+test("generic non-zero exit with alive session logs the client exit status", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  io.logCalls = [];
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  io.endGeneric(1);
+  await attaching;
+  const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
+  assert.ok(attachEnd, "missing attach_end");
+  assert.equal(attachEnd.fields.reason, "tmux client exited with status 1");
+  assert.equal(attachEnd.fields.socket_available, true);
+  assert.equal(attachEnd.fields.session_alive, true);
 });
 
 test("esc clears a persistent attach error", async () => {

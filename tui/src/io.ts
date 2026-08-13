@@ -65,13 +65,20 @@ export class FileSystemTuiIO implements TuiIO {
       });
       child.on("error", reject);
       child.on("exit", (code) => {
-        const reason = stderr.trim();
-        if (code === 0 && reason === "") {
-          resolve({ code, reason: "" });
-          return;
-        }
-        resolve({ code, reason: reason || `tmux exited with status ${code ?? "unknown"}` });
+        resolve({ code, reason: stderr.trim() });
       });
+    });
+  }
+
+  sessionExists(session: string): Promise<boolean> {
+    const socket = this.socketPath();
+    if (socket === "") return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const child: ChildProcess = spawn("tmux", ["-S", socket, "has-session", "-t", session], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      child.on("error", () => resolve(false));
+      child.on("exit", (code) => resolve(code === 0));
     });
   }
 
