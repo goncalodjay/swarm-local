@@ -22,11 +22,21 @@ around each attach/detach.
   - `tui_start` — TUI process starts.
   - `attach_start` — user pressed Enter to attach; includes role, session name,
     and socket path.
-  - `attach_end` — tmux attach process exited; includes role, exit code, and
-    reason/stderr text (empty string for clean detach).
+  - `attach_end` — tmux attach process exited; includes role, exit code,
+    reason, and root-cause state (`socket_available`, `session_alive`).
   - `socket_check` — result of the poll-time socket availability check.
   - `session_check` — result of an explicit session-existence check before or
     after attach.
+- **Root-cause diagnostics for `attach_end`**: when the tmux client exits with a
+  non-zero code and no stderr, the TUI must inspect the swarm socket and the
+  target tmux session and choose a precise human-readable reason:
+  1. If the socket is unavailable: `tmux socket <path> is unavailable`.
+  2. Else if the target session no longer exists:
+     `tmux session <session> no longer exists`.
+  3. Else if the tmux client wrote stderr: use the trimmed stderr text.
+  4. Else: `tmux client exited with status <code>`.
+- **Clean detach unchanged**: code `0` with empty stderr still logs an empty
+  reason and clears the banner.
 - **Banner behavior**: the dashboard shows the last `attach_end` reason in red
   until the user presses `Esc` or a new `attach_start` occurs. A clean detach
   clears the banner.
@@ -39,10 +49,12 @@ around each attach/detach.
 - Add an event logger to the TUI that appends to `.swarmforge/logs/tui.log`.
 - Emit the events listed above at the appropriate points in the attach lifecycle
   and poll loop.
+- After the tmux client exits, inspect the swarm socket and target tmux session
+  when the exit reason would otherwise be generic.
 - Make the dashboard error banner dismissible with `Esc` and clear it on a
   successful attach start.
-- Update unit tests to assert log entries are written and the banner can be
-  dismissed.
+- Update unit tests to assert log entries are written, root-cause fields are
+  correct, and the banner can be dismissed.
 
 ## Edge cases and error handling
 
@@ -52,6 +64,10 @@ around each attach/detach.
   surface repeated I/O errors in the UI.
 - Empty attach reason → still log `attach_end` with an empty reason field so
   the user can distinguish "clean detach" from "no error captured".
+- Generic non-zero exit (code 1, empty stderr) → inspect socket and session and
+  replace the generic fallback with a specific root-cause message.
+- Session or socket check itself fails → log the underlying error text as the
+  reason so the user sees why the diagnostic could not complete; never crash.
 - Concurrent TUI instances → all instances append to the same file; lines are
   not interleaved mid-line because each write is a single line.
 
