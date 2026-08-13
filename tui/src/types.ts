@@ -47,7 +47,13 @@ export interface AttachResult {
   reason: string;
 }
 
-export type LogFields = Record<string, string | number | null>;
+export interface AttachDiagnosis {
+  reason: string;
+  socketAvailable: boolean | null;
+  sessionAlive: boolean | null;
+}
+
+export type LogFields = Record<string, string | number | boolean | null>;
 
 export type Key =
   | "up"

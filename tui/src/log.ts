@@ -12,9 +12,10 @@ export function formatLogLine(event: string, fields: LogFields): string {
   return [timestamp, event, ...pairs].join(" ");
 }
 
-function formatValue(value: string | number | null): string {
+function formatValue(value: string | number | boolean | null): string {
   if (value === null) return "null";
   if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return String(value);
   if (/[^\w./:-]/.test(value)) {
     const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n").replaceAll("\r", "\\r");
     return `"${escaped}"`;

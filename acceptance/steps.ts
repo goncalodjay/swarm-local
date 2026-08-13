@@ -41,6 +41,17 @@ function roleRowText(world: World, role: string): string {
   return `${row.selected ? ">" : " "} ${row.marker} ${row.role}${row.task ? " " + row.task : ""}`;
 }
 
+function logFieldValue(line: string, field: string): string | null {
+  const match = new RegExp(`(?:^|\\s)${field}="((?:\\\\.|[^"])*)"|(?:^|\\s)${field}=(\\S+)`).exec(line);
+  if (!match) return null;
+  const raw = match[1] ?? match[2];
+  return raw.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+function attachEndLines(world: World, session: string): string[] {
+  return logLines(world).filter((line) => line.includes("attach_end") && line.includes(`session=${session}`));
+}
+
 export function createHandlers(): Handler[] {
   const handlers: Handler[] = [];
 
@@ -419,6 +430,20 @@ export function createHandlers(): Handler[] {
   });
 
   handlers.push({
+    pattern: /^the tmux client exits with code (\d+) and empty stderr and the (.+)$/,
+    run: async (world, _step, _example, [code, condition]) => {
+      assert.ok(world.pendingAttach, "no pending attach");
+      if (condition === "session no longer exists") world.sessionAlive = false;
+      if (condition === "swarm socket is unavailable") world.socketOk = false;
+      const pendingAttach = world.pendingAttach;
+      world.resolveAttach({ code: Number(code), reason: "" });
+      await pendingAttach;
+      world.pendingAttach = null;
+      captureFrame(world);
+    },
+  });
+
+  handlers.push({
     pattern: /^an error message shows "([^"]+)"$/,
     run: (world, _step, _example, [message]) => {
       assert.ok(world.rendered.includes(message), `frame missing error message ${message}`);
@@ -468,6 +493,30 @@ export function createHandlers(): Handler[] {
       assert.ok(
         logLines(world).some((line) => line.includes("attach_end") && line.includes(`session=${session}`) && line.includes(`reason="${message}"`)),
         `log missing attach_end with reason ${message} for ${session}`,
+      );
+    },
+  });
+
+  handlers.push({
+    pattern: /^the log contains an attach_end event for session (\S+) with reason matching "([^"]+)"$/,
+    run: (world, _step, _example, [session, pattern]) => {
+      const re = new RegExp(pattern);
+      assert.ok(
+        attachEndLines(world, session).some((line) => {
+          const reason = logFieldValue(line, "reason");
+          return reason !== null && re.test(reason);
+        }),
+        `log missing attach_end with reason matching ${pattern} for ${session}`,
+      );
+    },
+  });
+
+  handlers.push({
+    pattern: /^the log contains an attach_end event for session (\S+) with field (\w+)="([^"]+)"$/,
+    run: (world, _step, _example, [session, field, expected]) => {
+      assert.ok(
+        attachEndLines(world, session).some((line) => logFieldValue(line, field) === expected),
+        `log missing attach_end with field ${field}="${expected}" for ${session}`,
       );
     },
   });
