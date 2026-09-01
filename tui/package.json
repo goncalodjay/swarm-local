@@ -4,7 +4,7 @@
   "type": "module",
   "description": "SwarmForge terminal dashboard. Runs on Node native TypeScript type stripping.",
   "scripts": {
-    "build": "esbuild main.ts --bundle --platform=node --format=esm --outfile=dist/swarm-tui.js",
+    "build": "esbuild main.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire as __cR } from 'module'; const require = __cR(import.meta.url);\" --outfile=dist/swarm-tui.js",
     "test": "node --test test/*.test.ts",
     "test:property": "node --test test/property/*.test.ts"
   },

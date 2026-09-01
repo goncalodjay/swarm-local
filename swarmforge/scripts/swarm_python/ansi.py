@@ -1,0 +1,6 @@
+RED = "\x1b[0;31m"
+GREEN = "\x1b[0;32m"
+YELLOW = "\x1b[1;33m"
+CYAN = "\x1b[0;36m"
+BOLD = "\x1b[1m"
+RESET = "\x1b[0m"
