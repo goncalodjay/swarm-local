@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "pino": "^10.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

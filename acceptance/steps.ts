@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import {
   cleanupWorld,
@@ -13,6 +13,14 @@ import {
   parseAgentRow,
   markerForName,
   logLines,
+  installedBundlePath,
+  writeSwarmLocalBundle,
+  removeSwarmLocalBundle,
+  runSwarmInitInstall,
+  createInstalledBundle,
+  launchMarkerPath,
+  markerWritingBundle,
+  runInstalledTui,
   type World,
 } from "./world.ts";
 import type { StepHandlerDef } from "./runtime.ts";
@@ -668,6 +676,92 @@ export function createHandlers(): Handler[] {
       assert.ok(coder, "coder role not configured");
       const inbox = path.join(coder.worktreePath, ".swarmforge", "handoffs", "inbox");
       rmSync(inbox, { recursive: true, force: true });
+    },
+  });
+
+  handlers.push({
+    pattern: /^a project directory without SwarmForge installed$/,
+    run: () => {},
+  });
+
+  handlers.push({
+    pattern: /^the swarm-local TUI bundle exists at tui\/dist\/swarm-tui\.js$/,
+    run: (world) => {
+      writeSwarmLocalBundle(world, markerWritingBundle(world));
+    },
+  });
+
+  handlers.push({
+    pattern: /^the swarm-local TUI bundle does not exist$/,
+    run: (world) => {
+      removeSwarmLocalBundle(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^SwarmForge is initialized in the project directory$/,
+    run: (world) => {
+      runSwarmInitInstall(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I run swarm-init in the project directory$/,
+    run: (world) => {
+      runSwarmInitInstall(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^I run \.\/swarm tui$/,
+    run: async (world) => {
+      await runInstalledTui(world);
+    },
+  });
+
+  handlers.push({
+    pattern: /^the file \.swarmforge\/tui\/swarm-tui\.js exists in the project directory$/,
+    run: (world) => {
+      assert.ok(existsSync(installedBundlePath(world)), "installed TUI bundle missing");
+    },
+  });
+
+  handlers.push({
+    pattern: /^the installed TUI bundle is executed$/,
+    run: (world) => {
+      assert.equal(world.launchExitCode, 0, "launcher should exit 0");
+      assert.ok(existsSync(launchMarkerPath(world)), "installed bundle was not executed");
+    },
+  });
+
+  handlers.push({
+    pattern: /^swarm-init fails$/,
+    run: (world) => {
+      assert.ok(world.installOutcome, "expected an install outcome");
+      assert.notEqual(world.installOutcome?.status, "installed");
+    },
+  });
+
+  handlers.push({
+    pattern: /^the error reports that the TUI bundle is missing$/,
+    run: (world) => {
+      assert.equal(world.installOutcome?.status, "bundle_missing");
+    },
+  });
+
+  handlers.push({
+    pattern: /^a TUI bundle already exists at \.swarmforge\/tui\/swarm-tui\.js$/,
+    run: (world) => {
+      createInstalledBundle(world, "pre-existing-bundle-content");
+    },
+  });
+
+  handlers.push({
+    pattern: /^the existing TUI bundle remains unchanged$/,
+    run: (world) => {
+      const target = installedBundlePath(world);
+      assert.ok(existsSync(target), "installed TUI bundle missing");
+      assert.equal(readFileSync(target, "utf8"), "pre-existing-bundle-content");
     },
   });
 

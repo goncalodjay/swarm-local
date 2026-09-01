@@ -2,9 +2,13 @@
   "name": "swarm-tui",
   "private": true,
   "type": "module",
-  "description": "SwarmForge terminal dashboard. Zero runtime dependencies; runs on Node native TypeScript type stripping.",
+  "description": "SwarmForge terminal dashboard. Runs on Node native TypeScript type stripping.",
   "scripts": {
+    "build": "esbuild main.ts --bundle --platform=node --format=esm --outfile=dist/swarm-tui.js",
     "test": "node --test test/*.test.ts",
     "test:property": "node --test test/property/*.test.ts"
+  },
+  "dependencies": {
+    "pino": "^10.3.1"
   }
 }
