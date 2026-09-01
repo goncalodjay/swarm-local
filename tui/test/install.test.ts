@@ -6,9 +6,9 @@ import path from "node:path";
 import {
   installTuiBundle,
   installedBundlePath,
-  launchInstalledTui,
   runInstallCli,
 } from "../src/install.ts";
+import { launchInstalledTui } from "./helpers/launch-installed-tui.ts";
 
 function tempDir(prefix: string): string {
   return mkdtempSync(path.join(os.tmpdir(), prefix));

@@ -7,7 +7,8 @@ import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
 import { appendLogEntry, logPathForRoot } from "../tui/src/log.ts";
 import { frameModel, renderFrame, renderHelpBox } from "../tui/src/render.ts";
 import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../tui/src/types.ts";
-import { installTuiBundle, launchInstalledTui, type InstallOutcome } from "../tui/src/install.ts";
+import { installTuiBundle, type InstallOutcome } from "../tui/src/install.ts";
+import { launchInstalledTui } from "../tui/test/helpers/launch-installed-tui.ts";
 
 const ROLES = [
   { role: "specifier", worktreeName: "master", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", mode: "task" },

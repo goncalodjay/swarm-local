@@ -1,3 +1,8 @@
+# mutation-stamp: sha256=d924724bdaf21f70672de1efd694460c8b25476368f63f741e4b161f3d510a88
+# acceptance-mutation-manifest-begin
+# {"version":1,"tested_at":"2026-09-01T03:09:13Z","feature_name":"swarm-init-tui","feature_path":"features/swarm-init-tui.feature","background_hash":"74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b","implementation_hash":"unknown","scenarios":[]}
+# acceptance-mutation-manifest-end
+
 Feature: swarm-init-tui
 
 # swarm-init-tui 1: copies the TUI bundle to the target project

@@ -10,7 +10,7 @@ export type InstallOutcome =
 
 type InstallFailure = Extract<InstallOutcome, { status: "bundle_missing" | "target_exists" }>;
 
-interface Output {
+export interface Output {
   write(message: string): void;
 }
 
@@ -29,19 +29,6 @@ export function installTuiBundle(sourceBundle: string, projectRoot: string): Ins
   mkdirSync(path.dirname(target), { recursive: true });
   copyFileSync(sourceBundle, target);
   return { status: "installed", target };
-}
-
-export async function launchInstalledTui(projectRoot: string): Promise<number> {
-  const bundle = installedBundlePath(projectRoot);
-  if (!existsSync(bundle)) {
-    throw new Error(`TUI bundle not found at ${bundle}`);
-  }
-  const { spawn } = await import("node:child_process");
-  return new Promise((resolve, reject) => {
-    const child = spawn("node", [bundle], { cwd: projectRoot, stdio: "ignore" });
-    child.on("error", reject);
-    child.on("exit", (code) => resolve(code ?? -1));
-  });
 }
 
 export function errorMessage(outcome: InstallFailure): string {
