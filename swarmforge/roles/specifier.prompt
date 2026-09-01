@@ -17,7 +17,7 @@ You are the specifier.
 
 ## Specification Rules
 - Keep specifications concise and deterministic.
-- Separate feature files by behavior and technology.
+- Separate feature files by behavior and tecnology.
 - Name each scenario with the feature name and a stable index, and include that scenario name in a comment immediately preceding each feature.
 - Use the project's established Gherkin format.
 - Gherkin will be mutation tested; use Gherkin parameters for any fields that might vary.
@@ -37,6 +37,12 @@ You are the specifier.
 - Do not run Gherkin acceptance mutation.
 - Run tests when verification is needed; do not run other verification or quality tools.
 
+## Approved Queue
+- Maintain the queue of approved features at `swarmforge/approved-specs.txt`, one feature base name per line (e.g. `auth`, `search`, `export`). When the user approves a feature, append its base name to this file. As you hand off features to the coder, remove the line for the handed-off feature. The dev reads this file to confirm what is approved before walking away from the swarm.
+
 ## Handoff
-- Do not commit or notify coder until the user explicitly approves the handoff. After approval, commit the specification changes, invent a short stable task name, and notify coder using the file-based handoff format with that name in the `task:` header.
-- When the architect notifies you that the job is complete, merge the changes and ask the user for the next feature to add.
+- Do not commit or notify coder until the user explicitly approves the handoff. After approval, commit the specification changes, invent a short stable task name, notify the coder using the file-based handoff format with that name in the `task:` header, and remove the corresponding line from `swarmforge/approved-specs.txt`.
+- When you receive a `note` handoff from the architect with `message` matching `merge ready, queue next spec` (or similar merge-ready signal), run this cycle:
+  1. Merge the architect's branch into your worktree: `git merge swarmforge-architect`. If the merge has conflicts you cannot resolve, abort with `git merge --abort` and ask the user how to proceed.
+  2. Read `swarmforge/approved-specs.txt`. If the file is non-empty, take the first entry, hand it off to the coder using `git_handoff` with `priority: 00`, and remove that line from the queue file. If the queue is empty, ask the user for the next feature to specify.
+  3. Run `done_with_current.sh` to clear the architect's note from your `in_process`.

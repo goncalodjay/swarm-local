@@ -1,6 +1,9 @@
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { HandoffInfo, HandoffSnapshot } from "./types.ts";
+import { child } from "./logger.ts";
+
+const log = child("handoffs");
 
 const HANDOFF_STATES = ["new", "in_process", "completed"] as const;
 
@@ -18,7 +21,20 @@ export function parseHeaders(text: string): Record<string, string> {
 }
 
 export function readHandoff(filePath: string): HandoffInfo {
-  const headers = parseHeaders(readFileSync(filePath, "utf8"));
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch (err) {
+    log.warn({ event: "handoff_read_failed", file: filePath, err }, "cannot read handoff file");
+    return {
+      task: null,
+      type: null,
+      created_at: null,
+      dequeued_at: null,
+      completed_at: null,
+    };
+  }
+  const headers = parseHeaders(text);
   return {
     task: headers.task ?? null,
     type: headers.type ?? null,
@@ -30,10 +46,14 @@ export function readHandoff(filePath: string): HandoffInfo {
 
 function listHandoffs(dir: string): string[] {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((name) => name.endsWith(".handoff"))
-    .sort()
-    .map((name) => path.join(dir, name));
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (err) {
+    log.warn({ event: "handoff_list_failed", dir, err }, "cannot list handoff directory");
+    return [];
+  }
+  return entries.filter((name) => name.endsWith(".handoff")).sort().map((name) => path.join(dir, name));
 }
 
 function hasPendingUserNote(inboxRoot: string): boolean {
@@ -41,7 +61,13 @@ function hasPendingUserNote(inboxRoot: string): boolean {
     .map((sub) => listHandoffs(path.join(inboxRoot, sub)))
     .flat();
   for (const file of toUserFiles) {
-    const text = readFileSync(file, "utf8");
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (err) {
+      log.warn({ event: "handoff_read_failed", file, err }, "cannot read handoff for note scan");
+      continue;
+    }
     const headers = parseHeaders(text);
     if (headers.type === "note" && (headers.to ?? "").split(",").map((s) => s.trim()).includes("user")) {
       return true;

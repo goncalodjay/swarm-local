@@ -1,8 +1,11 @@
-import type { AgentState, AppView, AttachResult, FocusTarget, HandoffSnapshot, Key, LogFields, Mode, Role, TerminalSize } from "./types.ts";
+import type { AgentState, AppView, AttachResult, FocusTarget, HandoffSnapshot, Key, Mode, Role, TerminalSize } from "./types.ts";
 import { diagnoseAttachEnd } from "./attach.ts";
 import { moveSelection } from "./selection.ts";
 import { isDisabledMenuItem, menuItems, moveMenuFocus } from "./menu.ts";
 import { agentState } from "./status.ts";
+import { child } from "./logger.ts";
+
+const log = child("app");
 
 export const REQUIRED_SIZE: TerminalSize = { cols: 100, rows: 30 };
 
@@ -16,7 +19,7 @@ export interface TuiIO {
   terminalSize(): TerminalSize;
   attach(session: string, socket: string): Promise<AttachResult>;
   sessionExists(session: string): Promise<boolean>;
-  log(event: string, fields: LogFields): void;
+  log(event: string, fields: Record<string, string | number | boolean | null>): void;
   restore(): void;
   quit(): void;
 }
@@ -35,6 +38,7 @@ export class App {
   helpOpen = false;
   io: TuiIO;
   private lastSocketAvailable: boolean | null = null;
+  private lastView: AppView = "dashboard";
 
   constructor(io: TuiIO) {
     this.io = io;
@@ -44,9 +48,20 @@ export class App {
     this.io.log("tui_start", {});
     this.checkSocket();
     if (this.view === "error") return;
-    this.roles = this.io.readRoles();
+    try {
+      this.roles = this.io.readRoles();
+    } catch (err) {
+      log.error({ event: "start_roles_failed", err }, "cannot read roles at start");
+      this.view = "error";
+      this.errorMessage = "Cannot read roles.tsv.";
+      return;
+    }
     this.refreshAgents();
     this.checkSize();
+    log.info(
+      { event: "tui_ready", roles: this.roles.length, agents: this.agents.length },
+      "tui ready",
+    );
   }
 
   refreshAgents(): void {
@@ -62,8 +77,10 @@ export class App {
       this.view = "error";
       this.errorMessage = "The swarm socket is unavailable.";
       this.io.log("socket_check", { status: "unavailable" });
+      log.warn({ event: "socket_unavailable" }, "socket unavailable");
     } else {
       this.io.log("socket_check", { status: "available" });
+      log.info({ event: "socket_available" }, "socket available");
       if (this.view === "error") this.view = "dashboard";
     }
   }
@@ -76,6 +93,7 @@ export class App {
     } else if (this.view === "too-small") {
       this.view = "dashboard";
     }
+    this.logViewTransition();
   }
 
   poll(): void {
@@ -146,6 +164,7 @@ export class App {
   cycleFocus(): void {
     const index = FOCUS_ORDER.indexOf(this.focus);
     this.focus = FOCUS_ORDER[(index + 1) % FOCUS_ORDER.length];
+    log.debug({ event: "focus_changed", focus: this.focus }, "focus cycled");
   }
 
   async activate(): Promise<void> {
@@ -158,6 +177,7 @@ export class App {
     const item = items[this.menuFocus] ?? "dashboard";
     if (isDisabledMenuItem(item)) {
       this.hint = `${item}: not implemented`;
+      log.debug({ event: "menu_disabled", item }, "menu item disabled");
       return;
     }
     const roleIndex = this.roles.findIndex((role) => role.role === item);
@@ -169,11 +189,25 @@ export class App {
 
   async attachSelected(): Promise<void> {
     const agent = this.agents[this.selection];
-    if (!agent) return;
+    if (!agent) {
+      log.warn({ event: "attach_no_agent", selection: this.selection }, "no agent at selection");
+      return;
+    }
     this.attachError = null;
+    log.info(
+      { event: "attach_start", role: agent.role, session: agent.session, socket: this.io.socketPath() },
+      "attaching",
+    );
     this.io.log("attach_start", { role: agent.role, session: agent.session, socket: this.io.socketPath() });
     this.beginAttach();
-    const result = await this.io.attach(agent.session, this.io.socketPath());
+    let result: AttachResult;
+    try {
+      result = await this.io.attach(agent.session, this.io.socketPath());
+    } catch (err) {
+      log.error({ event: "attach_threw", session: agent.session, err }, "attach threw");
+      this.resumeAfterDetach({ code: -1, reason: errMessage(err) });
+      return;
+    }
     const diagnosis = await diagnoseAttachEnd(result, agent.session, this.io);
     this.io.log("attach_end", {
       role: agent.role,
@@ -183,6 +217,18 @@ export class App {
       socket_available: diagnosis.socketAvailable,
       session_alive: diagnosis.sessionAlive,
     });
+    log.info(
+      {
+        event: "attach_end",
+        role: agent.role,
+        session: agent.session,
+        code: result.code,
+        reason: diagnosis.reason,
+        socket_available: diagnosis.socketAvailable,
+        session_alive: diagnosis.sessionAlive,
+      },
+      "attach ended",
+    );
     this.resumeAfterDetach({ code: result.code, reason: diagnosis.reason });
   }
 
@@ -194,10 +240,26 @@ export class App {
     this.view = "dashboard";
     this.attachError = result.reason === "" ? null : result.reason;
     this.poll();
+    this.logViewTransition();
   }
 
   quit(): void {
+    log.info({ event: "tui_quit" }, "tui quitting");
     this.io.restore();
     this.io.quit();
   }
+
+  private logViewTransition(): void {
+    if (this.view !== this.lastView) {
+      log.debug(
+        { event: "view_changed", from: this.lastView, to: this.view },
+        "view changed",
+      );
+      this.lastView = this.view;
+    }
+  }
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

@@ -21,8 +21,8 @@ has_command() {
 source "$SCRIPT_DIR/swarm-terminal-adapter.sh"
 load_terminal_backend "$TERMINAL_BACKEND"
 
-if has_command bb; then
-  bb "$SCRIPT_DIR/stop_handoff_daemon.bb" "$WORKING_DIR" 2>/dev/null || true
+if has_command python3; then
+  python3 "$SCRIPT_DIR/swarm_python/entrypoints/stop_handoff_daemon.py" "$WORKING_DIR" 2>/dev/null || true
 else
   DAEMON_PID_FILE="$WORKING_DIR/.swarmforge/daemon/handoffd.pid"
   if [[ -f "$DAEMON_PID_FILE" ]]; then

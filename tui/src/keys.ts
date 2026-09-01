@@ -1,4 +1,7 @@
 import type { Key } from "./types.ts";
+import { child } from "./logger.ts";
+
+const log = child("keys");
 
 const KEY_SEQUENCES: Record<string, Key> = {
   "\u001b[A": "up",
@@ -21,5 +24,15 @@ const KEY_SEQUENCES: Record<string, Key> = {
 };
 
 export function parseKey(data: string): Key | null {
-  return KEY_SEQUENCES[data] ?? null;
+  const key = KEY_SEQUENCES[data];
+  if (!key) {
+    log.debug({ event: "key_unknown", bytes: data.length, hex: toHex(data) }, "unmapped key sequence");
+  }
+  return key ?? null;
+}
+
+function toHex(data: string): string {
+  return Array.from(data)
+    .map((c) => c.charCodeAt(0).toString(16).padStart(2, "0"))
+    .join(" ");
 }

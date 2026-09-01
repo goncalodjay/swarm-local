@@ -6,7 +6,7 @@
 - Before changing code, inspect the repository to identify its build, test, formatting, and dependency commands. Use tools already available in the project or on the local machine.
 
 ## Local-Only Tooling
-- This SwarmForge installation is self-contained. Do not clone, download, install, or update tools, prompts, scripts, or dependencies from a remote repository or package registry.
+- This SwarmForge installation is self-contained. Do not clone, download, install, or update tools, prompts or scripts from a remote repository or package registry.
 - If a required tool is unavailable locally, report the exact missing command and ask the user how to proceed.
 
 ## Local Configuration
