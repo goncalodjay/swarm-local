@@ -589,11 +589,11 @@
   (println (str/join " " (or (sleep-inhibitor-prefix) []))))
 
 (defn run-tui! [root]
-  (let [tui-main (fs/path root "tui" "main.ts")]
-    (when-not (fs/exists? tui-main)
-      (fail! (str red "Error:" reset " TUI not found at " tui-main)))
+  (let [tui-bundle (fs/path root ".swarmforge" "tui" "swarm-tui.js")]
+    (when-not (fs/exists? tui-bundle)
+      (fail! (str red "Error:" reset " TUI bundle not found at " tui-bundle)))
     (println (str green "Starting SwarmForge TUI in " reset root))
-    (process/exec "node" (str tui-main) {:dir (str root)})))
+    (process/exec "node" (str tui-bundle) {:dir (str root)})))
 
 (defn -main [& args]
   (case (first args)
