@@ -68,7 +68,7 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
         )
     elif agent == "codex":
         agent_cmd = (
-            f"codex -C {shell_quote(str(role_worktree))} "
+            f"codex exec -C {shell_quote(str(role_worktree))} "
             f"{_extra_args_prefix(row)}"
             f'"$(cat {shell_quote(str(prompt_file))})"'
         )
