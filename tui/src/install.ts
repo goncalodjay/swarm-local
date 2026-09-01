@@ -8,6 +8,12 @@ export type InstallOutcome =
   | { status: "bundle_missing"; source: string }
   | { status: "target_exists"; target: string };
 
+type InstallFailure = Extract<InstallOutcome, { status: "bundle_missing" | "target_exists" }>;
+
+interface Output {
+  write(message: string): void;
+}
+
 export function installedBundlePath(projectRoot: string): string {
   return path.join(projectRoot, INSTALLED_BUNDLE_REL);
 }
@@ -38,24 +44,28 @@ export async function launchInstalledTui(projectRoot: string): Promise<number> {
   });
 }
 
-export function errorMessage(outcome: Extract<InstallOutcome, { status: "bundle_missing" | "target_exists" }>): string {
+export function errorMessage(outcome: InstallFailure): string {
   if (outcome.status === "bundle_missing") {
     return `TUI bundle not found at ${outcome.source}. Build it with: (cd tui && npm run build)`;
   }
   return `TUI bundle already exists at ${outcome.target}; refusing to overwrite.`;
 }
 
-if (import.meta.main) {
-  const [source, projectRoot] = process.argv.slice(2);
+export function runInstallCli(args: readonly string[], stdout: Output, stderr: Output): number {
+  const [source, projectRoot] = args;
   if (!source || !projectRoot) {
-    process.stderr.write("usage: node tui/src/install.ts <source-bundle> <project-root>\n");
-    process.exit(2);
+    stderr.write("usage: node tui/src/install.ts <source-bundle> <project-root>\n");
+    return 2;
   }
   const outcome = installTuiBundle(source, projectRoot);
   if (outcome.status === "installed") {
-    process.stdout.write(`Installed TUI bundle at ${outcome.target}\n`);
-    process.exit(0);
+    stdout.write(`Installed TUI bundle at ${outcome.target}\n`);
+    return 0;
   }
-  process.stderr.write(`Error: ${errorMessage(outcome)}\n`);
-  process.exit(1);
+  stderr.write(`Error: ${errorMessage(outcome)}\n`);
+  return 1;
+}
+
+if (import.meta.main) {
+  process.exitCode = runInstallCli(process.argv.slice(2), process.stdout, process.stderr);
 }
