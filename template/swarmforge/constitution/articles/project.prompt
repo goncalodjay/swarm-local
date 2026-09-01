@@ -6,8 +6,10 @@
 - Before changing code, inspect the repository to identify its build, test, formatting, and dependency commands. Use tools already available in the project or on the local machine.
 
 ## Local-Only Tooling
-- This SwarmForge installation is self-contained. Do not clone, download, install, or update tools, prompts, scripts, or dependencies from a remote repository or package registry.
-- If a required tool is unavailable locally, report the exact missing command and ask the user how to proceed.
+- SwarmForge's own tooling (gherkin parser, gherkin mutator, gherkin IR DRY checker, swarm scripts, swarm-init, prompts) is self-contained. Do not clone, download, install, or update those from a remote repository or package registry.
+- Third-party language analysis tools and project dependencies (pytest, coverage, radon, pylint, mutmut, jscpd, npm/pip packages, etc.) may be installed when a task requires them and the user grants permission. Before installing, state the exact install command and ask the user. Do not auto-install.
+- Prefer installing into the project's local environment (project venv, pyproject.toml, package.json) when one exists. Ask which tool manager to use if it is unclear.
+- If the user declines, stop and report the missing tool instead of skipping the check silently.
 
 ## Local Configuration
 - Preserve project-local SwarmForge configuration under `swarmforge/`.
