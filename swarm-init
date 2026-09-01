@@ -147,6 +147,22 @@ for path in swarm swarmforge; do
   fi
 done
 
+TUI_INSTALL_SCRIPT="$SCRIPT_DIR/tui/src/install.ts"
+TUI_BUNDLE_SOURCE="$SCRIPT_DIR/tui/dist/swarm-tui.js"
+if ! command -v node >/dev/null 2>&1; then
+  echo "No se instaló: se requiere 'node' para instalar el bundle de TUI." >&2
+  exit 1
+fi
+if [[ ! -f "$TUI_INSTALL_SCRIPT" ]]; then
+  echo "No se instaló: no se encontró $TUI_INSTALL_SCRIPT." >&2
+  exit 1
+fi
+if ! install_output="$(node "$TUI_INSTALL_SCRIPT" "$TUI_BUNDLE_SOURCE" "$TARGET" 2>&1)"; then
+  echo "$install_output" >&2
+  echo "No se instaló: falló la instalación del bundle de TUI." >&2
+  exit 1
+fi
+
 cp -R "$TEMPLATE_DIR/swarmforge" "$TARGET/swarmforge"
 install -m 0755 "$TEMPLATE_DIR/swarm" "$TARGET/swarm"
 

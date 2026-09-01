@@ -7,6 +7,7 @@ import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
 import { appendLogEntry, logPathForRoot } from "../tui/src/log.ts";
 import { frameModel, renderFrame, renderHelpBox } from "../tui/src/render.ts";
 import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../tui/src/types.ts";
+import { installTuiBundle, launchInstalledTui, type InstallOutcome } from "../tui/src/install.ts";
 
 const ROLES = [
   { role: "specifier", worktreeName: "master", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", mode: "task" },
@@ -34,6 +35,10 @@ export interface World {
   resolveAttach: (result: AttachResult) => void;
   detach: () => void;
   endSession: (message: string) => void;
+  projectDir: string;
+  swarmLocalDir: string;
+  installOutcome: InstallOutcome | null;
+  launchExitCode: number | null;
 }
 
 export class TestIO implements TuiIO {
@@ -155,6 +160,10 @@ export function createWorld(): World {
     resolveAttach: (): void => {},
     detach: (): void => {},
     endSession: (): void => {},
+    projectDir: mkdtempSync(path.join(os.tmpdir(), "swarm-init-project-")),
+    swarmLocalDir: mkdtempSync(path.join(os.tmpdir(), "swarm-init-local-")),
+    installOutcome: null,
+    launchExitCode: null,
   };
   world.io = new TestIO(world);
   world.app = new App(world.io);
@@ -163,6 +172,8 @@ export function createWorld(): World {
 
 export function cleanupWorld(world: World): void {
   rmSync(world.root, { recursive: true, force: true });
+  rmSync(world.projectDir, { recursive: true, force: true });
+  rmSync(world.swarmLocalDir, { recursive: true, force: true });
 }
 
 export function startSwarm(world: World): void {
@@ -246,4 +257,46 @@ export function readLog(world: World): string {
 
 export function logLines(world: World): string[] {
   return readLog(world).split("\n").filter((line) => line !== "");
+}
+
+export function swarmLocalBundlePath(world: World): string {
+  return path.join(world.swarmLocalDir, "tui", "dist", "swarm-tui.js");
+}
+
+export function installedBundlePath(world: World): string {
+  return path.join(world.projectDir, ".swarmforge", "tui", "swarm-tui.js");
+}
+
+export function writeSwarmLocalBundle(world: World, content: string): void {
+  const bundle = swarmLocalBundlePath(world);
+  mkdirSync(path.dirname(bundle), { recursive: true });
+  writeFileSync(bundle, content);
+}
+
+export function removeSwarmLocalBundle(world: World): void {
+  rmSync(swarmLocalBundlePath(world), { force: true });
+}
+
+export function runSwarmInitInstall(world: World): InstallOutcome {
+  world.installOutcome = installTuiBundle(swarmLocalBundlePath(world), world.projectDir);
+  return world.installOutcome;
+}
+
+export function createInstalledBundle(world: World, content: string): void {
+  const target = installedBundlePath(world);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, content);
+}
+
+export function launchMarkerPath(world: World): string {
+  return path.join(world.projectDir, "tui-executed.marker");
+}
+
+export function markerWritingBundle(world: World): string {
+  return `const fs = require("node:fs");\nfs.writeFileSync(${JSON.stringify(launchMarkerPath(world))}, "executed");\n`;
+}
+
+export async function runInstalledTui(world: World): Promise<number> {
+  world.launchExitCode = await launchInstalledTui(world.projectDir);
+  return world.launchExitCode;
 }
