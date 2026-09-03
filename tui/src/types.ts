@@ -34,7 +34,11 @@ export interface AgentState {
   marker: Marker;
   task: string | null;
   handoffs: HandoffSnapshot;
+  herdrStatus: HerdrStatus | null;
+  terminalTitle: string | null;
 }
+
+export type HerdrStatus = "working" | "idle" | "blocked" | "done" | "unknown";
 
 export type AppView = "dashboard" | "error" | "too-small" | "attached";
 

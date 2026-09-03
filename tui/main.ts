@@ -1,13 +1,28 @@
+import "./src/instrumentation.ts";
+import { startActiveObservation } from "@langfuse/tracing";
 import { App } from "./src/app.ts";
 import { FileSystemTuiIO, projectRoot, setStdinDataListener } from "./src/io.ts";
 import { parseKey } from "./src/keys.ts";
 import { frameModel, renderFrame } from "./src/render.ts";
 import { init, child } from "./src/logger.ts";
 import { alertNeedsHuman } from "./src/notifications.ts";
+import { isTracingConfigured, shutdownTracing } from "./src/instrumentation.ts";
 
 const POLL_INTERVAL_MS = 1000;
 
 async function main(): Promise<void> {
+  await startActiveObservation("tui.session", async (rootSpan) => {
+    await runTui(rootSpan);
+  }).finally(async () => {
+    try {
+      await shutdownTracing();
+    } catch {
+      /* swallow */
+    }
+  });
+}
+
+async function runTui(rootSpan: { update: (attrs: Record<string, unknown>) => void }): Promise<void> {
   let root: string;
   try {
     root = projectRoot(process.cwd());
@@ -17,6 +32,7 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+  rootSpan.update({ input: { root }, metadata: { tracing_configured: isTracingConfigured() } });
 
   const logger = init({ root });
   const log = child("main");
@@ -147,6 +163,7 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
+  rootSpan.update({ output: { roles: app.roles.length, view: app.view } });
   log.info({ event: "tui_loop_entered" }, "tui loop entered");
 }
 

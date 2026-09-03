@@ -9,6 +9,9 @@
     "test:property": "node --test test/property/*.test.ts"
   },
   "dependencies": {
+    "@langfuse/otel": "^5.11.0",
+    "@langfuse/tracing": "^5.11.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
     "pino": "^10.3.1"
   }
 }

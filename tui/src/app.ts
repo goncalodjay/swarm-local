@@ -1,9 +1,11 @@
-import type { AgentState, AppView, AttachResult, FocusTarget, HandoffSnapshot, Key, Mode, Role, TerminalSize } from "./types.ts";
+import type { AgentState, AppView, AttachResult, FocusTarget, HerdrAgent, HerdrStatus, HandoffSnapshot, Key, Mode, Role, TerminalSize } from "./types.ts";
 import { diagnoseAttachEnd } from "./attach.ts";
 import { moveSelection } from "./selection.ts";
 import { isDisabledMenuItem, menuItems, moveMenuFocus } from "./menu.ts";
 import { agentState } from "./status.ts";
 import { child } from "./logger.ts";
+import { findAgentForCwd } from "./herdr.ts";
+import { notifyBlocked, notifyFinished } from "./sound.ts";
 
 const log = child("app");
 
@@ -19,6 +21,7 @@ export interface TuiIO {
   terminalSize(): TerminalSize;
   attach(session: string, socket: string): Promise<AttachResult>;
   sessionExists(session: string): Promise<boolean>;
+  queryHerdrAgents(): Promise<HerdrAgent[]>;
   log(event: string, fields: Record<string, string | number | boolean | null>): void;
   restore(): void;
   quit(): void;
@@ -39,6 +42,8 @@ export class App {
   io: TuiIO;
   private lastSocketAvailable: boolean | null = null;
   private lastView: AppView = "dashboard";
+  private lastHerdrStatus: Map<string, HerdrStatus> = new Map();
+  private herdrAgents: HerdrAgent[] = [];
 
   constructor(io: TuiIO) {
     this.io = io;
@@ -65,7 +70,31 @@ export class App {
   }
 
   refreshAgents(): void {
-    this.agents = this.roles.map((role) => agentState(role, this.io.readSnapshot(role)));
+    this.agents = this.roles.map((role) => {
+      const snapshot = this.io.readSnapshot(role);
+      const herdrAgent = findAgentForCwd(this.herdrAgents, role.worktreePath);
+      return agentState(role, snapshot, herdrAgent?.agent_status ?? null, herdrAgent?.terminal_title ?? null);
+    });
+    this.detectHerdrTransitions();
+  }
+
+  private detectHerdrTransitions(): void {
+    for (const agent of this.agents) {
+      const prev = this.lastHerdrStatus.get(agent.role) ?? null;
+      const curr = agent.herdrStatus ?? null;
+      if (prev === curr) continue;
+      this.lastHerdrStatus.set(agent.role, curr);
+      if (prev === null || curr === null) continue;
+      if (prev === "working" && curr === "blocked") {
+        try { notifyBlocked(agent.role); } catch (err) {
+          log.warn({ event: "sound_failed", role: agent.role, err }, "sound dispatch failed");
+        }
+      } else if (prev === "working" && (curr === "idle" || curr === "done")) {
+        try { notifyFinished(agent.role); } catch (err) {
+          log.warn({ event: "sound_failed", role: agent.role, err }, "sound dispatch failed");
+        }
+      }
+    }
   }
 
   checkSocket(): void {
@@ -97,9 +126,19 @@ export class App {
   }
 
   poll(): void {
-    this.refreshAgents();
+    void this.refreshHerdrAndAgents();
     this.checkSocket();
     this.checkSize();
+  }
+
+  private async refreshHerdrAndAgents(): Promise<void> {
+    try {
+      this.herdrAgents = await this.io.queryHerdrAgents();
+    } catch (err) {
+      log.warn({ event: "herdr_query_failed", err }, "herdr query threw");
+      this.herdrAgents = [];
+    }
+    this.refreshAgents();
   }
 
   async press(key: Key): Promise<void> {

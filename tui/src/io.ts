@@ -5,8 +5,9 @@ import { parseRoles } from "./roles.ts";
 import { readHandoffSnapshot } from "./handoffs.ts";
 import { appendLogEntry, logPathForRoot } from "./log.ts";
 import { child } from "./logger.ts";
+import { queryHerdrAgents as queryHerdrAgentsImpl } from "./herdr.ts";
 import type { TuiIO } from "./app.ts";
-import type { AttachResult, HandoffSnapshot, Role, TerminalSize } from "./types.ts";
+import type { AttachResult, HerdrAgent, HandoffSnapshot, Role, TerminalSize } from "./types.ts";
 
 const log = child("io");
 
@@ -203,6 +204,10 @@ export class FileSystemTuiIO implements TuiIO {
       });
       proc.on("exit", (code) => resolve(code === 0));
     });
+  }
+
+  queryHerdrAgents(): Promise<HerdrAgent[]> {
+    return queryHerdrAgentsImpl();
   }
 
   log(event: string, fields: Record<string, string | number | boolean | null>): void {
