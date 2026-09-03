@@ -46,8 +46,30 @@ You are the architect.
 ## Handoff
 - If a handoff contains no changes, do not hand it off to the other agents.
 - As the final verification sequence, run the language mutation tool, then the language DRY tool, then soft Gherkin acceptance mutation (`--level soft`) unless directed otherwise. Fix any issues each tool finds before running the next one.
-- When the current refactorer task or batch is complete, commit architectural changes and hand off functional work before taking another queued refactorer task or batch:
-  - Send `git_handoff` files to the coder and refactorer using `priority: 00` when they have follow-up work to review.
-  - When the batch is fully complete — i.e., you have no more follow-up to send to the coder or refactorer and you are satisfied with the architectural changes — send a `note` handoff to the specifier with `priority: 50` and `message: "merge ready, queue next spec"`. This hands control back to the specifier so it can merge your commits and feed the next approved feature to the coder.
-  - Do not send any other `note` handoffs to the specifier. The merge-ready signal above is the only completion signal.
-  - If the completed work produced no changes, or only manifest/non-functional changes, run `done_with_current.sh` and take the next queued task or batch without forwarding it.
+
+## Completing a Batch Or Task
+The architect is NOT the end of the chain. The specifier is. Architectural commits merge at the specifier via the merge-ready note, never via coder or refactorer.
+
+### During a batch
+For each task in the batch:
+- Commit your architectural changes to your worktree branch.
+- If you find functional work the coder or refactorer must do (a real bug, missing test, behavior change), send a `git_handoff` with a SPECIFIC `task:` name describing the work — for example `task: fix-login-timeout` or `task: add-coverage-for-helper`. Do not bundle multiple follow-ups into one handoff; send one per concrete item. Each `git_handoff` to a downstream role gets a unique task name.
+- If the task is architecturally clean and needs no follow-up, run `done_with_current.sh` immediately and take the next task. Do not send any handoff for that task.
+- If the work produced no changes (or only manifest/non-functional churn), run `done_with_current.sh` and take the next task without forwarding.
+
+### At the end of the batch (MANDATORY)
+When the in-process batch is empty after `done_with_current.sh` on the last item, you MUST send exactly one `note` handoff to the specifier:
+
+```text
+type: note
+to: specifier
+priority: 50
+message: merge ready, queue next spec
+```
+
+This is the ONLY signal that hands control back to the specifier so it can merge your branch and feed the next approved feature from `swarmforge/approved-specs.txt` to the coder. Without this note, the specifier does not dequeue and the chain stalls. Send it even when you have no remaining follow-up to dispatch, even when you made no commits this batch, and even when the batch was a single empty task.
+
+If at the end of the batch you also have additional functional follow-up to dispatch, send the follow-up `git_handoff` files to coder/refactorer FIRST and the merge-ready `note` to the specifier LAST in the same cycle.
+
+### Anti-pattern
+Do NOT send `git_handoff` to `to: coder,refactorer` with body `merge_and_process architect <commit>` to push your own architectural commits. `merge_and_process` is reserved for end-of-chain broadcasts; recipients merge only and stop forwarding, so using it on intermediate roles (coder, refactorer) silently kills the chain — the specifier never receives the merge-ready note and `approved-specs.txt` is never drained. Architectural commits reach the master worktree only through the specifier's `git merge swarmforge-architect` after receiving the merge-ready note.

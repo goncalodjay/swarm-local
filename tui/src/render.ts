@@ -22,9 +22,15 @@ export interface FrameModel {
   menuFocus: number;
   hint: string | null;
   helpOpen: boolean;
+  herdrMatched: number;
+  herdrTotal: number;
 }
 
 export function frameModel(app: App): FrameModel {
+  let herdrMatched = 0;
+  for (const agent of app.agents) {
+    if (agent.herdrStatus !== null) herdrMatched += 1;
+  }
   return {
     view: app.view === "attached" ? "dashboard" : app.view,
     roles: app.roles,
@@ -40,6 +46,8 @@ export function frameModel(app: App): FrameModel {
     menuFocus: app.menuFocus,
     hint: app.hint,
     helpOpen: app.helpOpen,
+    herdrMatched,
+    herdrTotal: app.roles.length,
   };
 }
 
@@ -96,7 +104,10 @@ function pushEvents(events: HandoffEvent[], h: HandoffInfo, state: string): void
 export function renderHeader(model: FrameModel): string {
   const socket = model.socket === "" ? "socket: —" : `socket: ${model.socket}`;
   const size = `${model.terminalSize.cols}x${model.terminalSize.rows}`;
-  return `${style.bold(style.cyan("SwarmForge TUI"))} · ${socket} · poll 1s · ${size}`;
+  const herdrLabel = model.herdrMatched === 0
+    ? style.yellow(`herdr: 0/${model.herdrTotal} matched`)
+    : `herdr: ${model.herdrMatched}/${model.herdrTotal} matched`;
+  return `${style.bold(style.cyan("SwarmForge TUI"))} · ${socket} · poll 1s · ${herdrLabel} · ${size}`;
 }
 
 export function renderMenuBar(roles: Role[], focus: FocusTarget = "agents", menuFocus = 0): string {
@@ -130,6 +141,14 @@ export function renderDetailPane(agent: AgentState | null): string[] {
   lines.push(`Detail — ${agent.role}`);
   lines.push(`Task: ${agent.task ?? "—"}`);
   lines.push(`State: ${style.statusColor(agent.status)(statusLabel(agent.status))}`);
+  if (agent.herdrStatus !== null) {
+    lines.push(`Herdr: ${agent.herdrStatus}`);
+  } else {
+    lines.push(`Herdr: ${style.dim("not detected (no agent in this worktree)")}`);
+  }
+  if (agent.terminalTitle) {
+    lines.push(`Title: ${agent.terminalTitle}`);
+  }
   const ip = agent.handoffs.inProcess[0];
   if (ip) {
     lines.push("Timestamps:");
