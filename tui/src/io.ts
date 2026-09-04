@@ -11,44 +11,69 @@ import type { AttachResult, HerdrAgent, HandoffSnapshot, Role, TerminalSize } fr
 
 const log = child("io");
 
-let stdinDataListener: ((data: Buffer) => void) | null = null;
-let stdinWasRaw = false;
+/**
+ * Hands the terminal to and from a foreground child process.
+ *
+ * Attaching to a tmux session means giving the terminal away completely:
+ * the child inherits stdio and drives the screen until it exits. Whoever
+ * owns the terminal (the OpenTUI renderer in the running TUI, plain stdio
+ * in tests) supplies this pair so `attach` does not need to know which.
+ */
+export interface TerminalControl {
+  /** Give the terminal to the child process. */
+  release(): void;
+  /** Take the terminal back after the child exits. */
+  reclaim(): void;
+}
 
-export function setStdinDataListener(listener: (data: Buffer) => void): void {
-  stdinDataListener = listener;
-  process.stdin.on("data", listener);
+/**
+ * Fallback control used when nothing else is installed. It only restores
+ * sane modes, which is all a non-rendering caller needs.
+ */
+const bareTerminalControl: TerminalControl = {
+  release(): void {
+    try {
+      if (process.stdin.isTTY && process.stdin.isRaw) process.stdin.setRawMode(false);
+      process.stdout.write("\x1b[?25h");
+      process.stdout.write("\x1b[0m");
+    } catch (err) {
+      log.warn({ event: "tty_release_failed", err: errMessage(err) }, "tty release failed");
+    }
+  },
+  reclaim(): void {
+    try {
+      process.stdin.resume();
+    } catch (err) {
+      log.warn({ event: "tty_reclaim_failed", err: errMessage(err) }, "tty reclaim failed");
+    }
+  },
+};
+
+let terminalControl: TerminalControl = bareTerminalControl;
+
+/**
+ * How the TUI leaves. The renderer must be torn down before the process
+ * exits, otherwise the terminal is left in raw mode on the alternate
+ * screen, so the owner installs its own handler.
+ */
+let exitHandler: (code: number) => void = (code) => process.exit(code);
+
+/** Install the shutdown path used by `quit`. */
+export function setExitHandler(handler: (code: number) => void): void {
+  exitHandler = handler;
+}
+
+/** Install the terminal owner's release/reclaim pair. */
+export function setTerminalControl(control: TerminalControl): void {
+  terminalControl = control;
 }
 
 function releaseTty(): void {
-  stdinWasRaw = !!process.stdin.isRaw;
-  try {
-    if (process.stdin.isTTY) {
-      if (stdinWasRaw) process.stdin.setRawMode(false);
-      process.stdin.pause();
-      if (stdinDataListener) {
-        process.stdin.removeListener("data", stdinDataListener);
-      }
-    }
-    process.stdout.write("\x1b[?25h");
-    process.stdout.write("\x1b[0m");
-  } catch (err) {
-    log.warn({ event: "tty_release_failed", err: errMessage(err) }, "tty release failed");
-  }
+  terminalControl.release();
 }
 
 function reclaimTty(): void {
-  try {
-    if (process.stdin.isTTY) {
-      if (stdinWasRaw) process.stdin.setRawMode(true);
-      if (stdinDataListener) process.stdin.on("data", stdinDataListener);
-      process.stdin.resume();
-      process.stdin.setEncoding("utf8");
-    }
-    process.stdout.write("\x1b[?5l");
-    process.stdout.write("\x1b[2J\x1b[H");
-  } catch (err) {
-    log.warn({ event: "tty_reclaim_failed", err: errMessage(err) }, "tty reclaim failed");
-  }
+  terminalControl.reclaim();
 }
 
 export function projectRoot(cwd: string): string {
@@ -145,7 +170,7 @@ export class FileSystemTuiIO implements TuiIO {
     return new Promise((resolve) => {
       releaseTty();
       log.info(
-        { event: "tty_released", session, socket, raw: stdinWasRaw },
+        { event: "tty_released", session, socket },
         "tty released for tmux attach",
       );
 
@@ -225,7 +250,7 @@ export class FileSystemTuiIO implements TuiIO {
   }
 
   quit(): void {
-    process.exit(0);
+    exitHandler(0);
   }
 }
 

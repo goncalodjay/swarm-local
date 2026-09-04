@@ -36,3 +36,53 @@ function toHex(data: string): string {
     .map((c) => c.charCodeAt(0).toString(16).padStart(2, "0"))
     .join(" ");
 }
+/**
+ * A key event as OpenTUI reports it.
+ *
+ * Only the fields the TUI needs are declared, so this stays decoupled from
+ * the renderer's own richer type.
+ */
+export interface ParsedKeyEvent {
+  name: string;
+  ctrl: boolean;
+  shift: boolean;
+  sequence?: string;
+}
+
+/** Map an OpenTUI key event onto an application key. */
+export function keyFromParsed(event: ParsedKeyEvent): Key | null {
+  const { name, ctrl, shift } = event;
+  if (ctrl) return name === "k" ? "ctrl+k" : null;
+  switch (name) {
+    case "up":
+    case "down":
+    case "left":
+    case "right":
+    case "home":
+    case "end":
+    case "tab":
+      return name;
+    case "escape":
+      return "esc";
+    case "return":
+    case "enter":
+      return "enter";
+    case "q":
+      return "quit";
+    case "j":
+      return "j";
+    case "k":
+      return "k";
+    case "g":
+      return shift ? "G" : "g";
+    case "G":
+      return "G";
+    case "?":
+      return "?";
+    case "/":
+      return shift ? "?" : null;
+    default:
+      log.debug({ event: "key_unmapped", name, ctrl, shift }, "unmapped parsed key");
+      return null;
+  }
+}

@@ -15,7 +15,7 @@ function tempDir(prefix: string): string {
 }
 
 function writeSourceBundle(dir: string, content = "bundle-content"): string {
-  const file = path.join(dir, "swarm-tui.js");
+  const file = path.join(dir, "swarm-tui");
   writeFileSync(file, content);
   return file;
 }
@@ -28,9 +28,9 @@ function output(): { stream: { write(message: string): void }; read: () => strin
   };
 }
 
-test("installedBundlePath points at .swarmforge/tui/swarm-tui.js under the project root", () => {
+test("installedBundlePath points at .swarmforge/tui/swarm-tui under the project root", () => {
   const root = "/tmp/some/project";
-  assert.equal(installedBundlePath(root), path.join(root, ".swarmforge", "tui", "swarm-tui.js"));
+  assert.equal(installedBundlePath(root), path.join(root, ".swarmforge", "tui", "swarm-tui"));
 });
 
 test("installTuiBundle copies the bundle into the project when the source exists", () => {
@@ -46,7 +46,7 @@ test("installTuiBundle copies the bundle into the project when the source exists
 
 test("installTuiBundle reports bundle_missing when the source bundle does not exist", () => {
   const project = tempDir("install-project-");
-  const outcome = installTuiBundle("/does/not/exist/swarm-tui.js", project);
+  const outcome = installTuiBundle("/does/not/exist/swarm-tui", project);
   assert.equal(outcome.status, "bundle_missing");
   assert.ok(!existsSync(installedBundlePath(project)), "no target should be created");
 });
@@ -64,7 +64,7 @@ test("runInstallCli reports an install failure through its return code and error
   const stdout = output();
   const stderr = output();
   const project = tempDir("install-project-");
-  const status = runInstallCli(["/does/not/exist/swarm-tui.js", project], stdout.stream, stderr.stream);
+  const status = runInstallCli(["/does/not/exist/swarm-tui", project], stdout.stream, stderr.stream);
   assert.equal(status, 1);
   assert.equal(stdout.read(), "");
   assert.match(stderr.read(), /TUI bundle not found/);
@@ -114,7 +114,7 @@ test("launchInstalledTui executes the installed bundle", async () => {
   const sourceDir = tempDir("install-src-");
   const project = tempDir("install-project-");
   const marker = path.join(project, "executed.marker");
-  const stub = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed");\nprocess.exit(0);\n`;
+  const stub = `#!/bin/sh\nprintf executed > ${JSON.stringify(marker)}\nexit 0\n`;
   const source = writeSourceBundle(sourceDir, stub);
   const outcome = installTuiBundle(source, project);
   assert.equal(outcome.status, "installed");

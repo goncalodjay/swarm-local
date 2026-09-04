@@ -8,7 +8,7 @@ export function launchInstalledTui(projectRoot: string): Promise<number> {
     return Promise.reject(new Error(`TUI bundle not found at ${bundle}`));
   }
   return new Promise((resolve, reject) => {
-    const child = spawn("node", [bundle], { cwd: projectRoot, stdio: "ignore" });
+    const child = spawn(bundle, { cwd: projectRoot, stdio: "ignore" });
     child.on("error", reject);
     child.on("exit", (code) => resolve(code ?? -1));
   });

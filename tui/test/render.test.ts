@@ -12,51 +12,12 @@ import {
   renderFooter,
   renderError,
   renderTooSmall,
-  renderFrame,
   frameModel,
   type FrameModel,
 } from "../src/render.ts";
 import type { App, TuiIO } from "../src/app.ts";
 import type { AgentState, Role, TerminalSize } from "../src/types.ts";
-
-const roles: Role[] = [
-  { role: "specifier", worktreeName: "master", worktreePath: "/p", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", receiveMode: "task" },
-  { role: "coder", worktreeName: "coder", worktreePath: "/p", session: "swarmforge-coder", displayName: "Coder", agent: "opencode", receiveMode: "task" },
-  { role: "reviewer", worktreeName: "reviewer", worktreePath: "/p", session: "swarmforge-reviewer", displayName: "Reviewer", agent: "codex", receiveMode: "task" },
-  { role: "architect", worktreeName: "architect", worktreePath: "/p", session: "swarmforge-architect", displayName: "Architect", agent: "opencode", receiveMode: "batch" },
-];
-
-function agent(role: Role, marker: AgentState["marker"], task: string | null): AgentState {
-  return {
-    role: role.role,
-    displayName: role.displayName,
-    session: role.session,
-    status: marker === "spinner" ? "working" : marker === "bang" ? "needs-human" : marker === "dot" ? "finished-idle" : "idle",
-    marker,
-    task,
-    handoffs: { queued: [], inProcess: [], completed: [], pendingUserNote: marker === "bang" },
-  };
-}
-
-function model(view: FrameModel["view"], agents: AgentState[], selection: number, overrides: Partial<FrameModel> = {}): FrameModel {
-  return {
-    view,
-    roles,
-    agents,
-    selection,
-    errorMessage: "boom",
-    attachError: null,
-    terminalSize: { cols: 120, rows: 40 },
-    requiredSize: { cols: 100, rows: 30 },
-    socket: "/p/.swarmforge/swarm.sock",
-    mode: "normal",
-    focus: "menu",
-    menuFocus: 0,
-    hint: null,
-    helpOpen: false,
-    ...overrides,
-  };
-}
+import { agent, roles } from "./helpers/model.ts";
 
 test("markerGlyph renders distinct glyphs", () => {
   assert.equal(markerGlyph("spinner"), "◐");
@@ -115,6 +76,8 @@ test("renderDetailPane shows task, state, timestamps and events", () => {
       completed: [],
       pendingUserNote: false,
     },
+    herdrStatus: null,
+    terminalTitle: null,
   };
   const lines = renderDetailPane(coder).join("\n");
   assert.ok(lines.includes("fix-login"));
@@ -148,25 +111,6 @@ test("renderTooSmall shows current and required sizes", () => {
   assert.ok(text.includes("100x30"));
 });
 
-test("renderFrame dashboard includes panel, menu and footer", () => {
-  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", i === 1 ? "fix-login" : null));
-  const frame = renderFrame(model("dashboard", agents, 1)).join("\n");
-  assert.ok(frame.includes("[dashboard]"));
-  assert.ok(frame.includes("◐ coder fix-login"));
-  assert.ok(frame.includes("↑/↓ select"));
-});
-
-test("renderFrame error view reports unavailable", () => {
-  const frame = renderFrame(model("error", [], 0)).join("\n");
-  assert.ok(frame.includes("Swarm unavailable"));
-});
-
-test("renderFrame too-small view reports size", () => {
-  const frame = renderFrame(model("too-small", [], 0, { terminalSize: { cols: 80, rows: 24 } })).join("\n");
-  assert.ok(frame.includes("80x24"));
-  assert.ok(frame.includes("100x30"));
-});
-
 function stubApp(overrides: Partial<App> = {}, size: TerminalSize = { cols: 120, rows: 40 }): App {
   const stub: Partial<App> = {
     view: "dashboard",
@@ -188,12 +132,6 @@ function stubApp(overrides: Partial<App> = {}, size: TerminalSize = { cols: 120,
 test("frameModel maps the attached view to the dashboard", () => {
   const m = frameModel(stubApp({ view: "attached" }));
   assert.equal(m.view, "dashboard");
-});
-
-test("renderFrame dashboard shows a non-transient attach error banner", () => {
-  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", null));
-  const frame = renderFrame(model("dashboard", agents, 1, { attachError: "server disconnected unexpectedly" })).join("\n");
-  assert.ok(frame.includes("server disconnected unexpectedly"));
 });
 
 test("frameModel passes through roles, agents, selection and error message", () => {
@@ -241,30 +179,6 @@ test("renderLegend covers every status marker", () => {
   }
 });
 
-test("renderFrame dashboard draws a boxed frame", () => {
-  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", i === 1 ? "fix-login" : null));
-  const frame = renderFrame(model("dashboard", agents, 1)).join("\n");
-  assert.ok(frame.includes("┌"));
-  assert.ok(frame.includes("└"));
-  assert.ok(frame.includes("Agents"));
-  assert.ok(frame.includes("Detail — coder"));
-  assert.ok(frame.includes("◐ coder fix-login"));
-  assert.ok(frame.includes("↑/↓ select"));
-});
-
-test("renderFrame error view is boxed", () => {
-  const frame = renderFrame(model("error", [], 0)).join("\n");
-  assert.ok(frame.includes("Swarm unavailable"));
-  assert.ok(frame.includes("└"));
-});
-
-test("renderFrame too-small view is boxed", () => {
-  const frame = renderFrame(model("too-small", [], 0, { terminalSize: { cols: 80, rows: 24 } })).join("\n");
-  assert.ok(frame.includes("80x24"));
-  assert.ok(frame.includes("100x30"));
-  assert.ok(frame.includes("└"));
-});
-
 test("renderFooter switches to the prefix footer in prefix mode", () => {
   const footer = renderFooter("prefix", null, false);
   assert.ok(footer.includes("Tab cycle focus"));
@@ -281,26 +195,3 @@ test("renderFooter shows the close hint while the help overlay is open", () => {
   assert.ok(renderFooter("normal", null, true).includes("close help"));
 });
 
-test("renderFrame with an open help overlay includes the keybinding list", () => {
-  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", i === 1 ? "fix-login" : null));
-  const frame = renderFrame(model("dashboard", agents, 1, { helpOpen: true })).join("\n");
-  for (const key of ["Ctrl+k", "Tab", "?", "j/k", "g/G"]) {
-    assert.ok(frame.includes(key), `help overlay missing ${key}`);
-  }
-  assert.ok(frame.includes("Focus: menu"));
-});
-
-test("renderFrame highlights the focused menu item", () => {
-  const frame = renderFrame(model("dashboard", [], 0, { focus: "menu", menuFocus: 5 })).join("\n");
-  assert.ok(frame.includes("(logs)"));
-  const focused = renderFrame(model("dashboard", [], 0, { focus: "menu", menuFocus: 0 })).join("\n");
-  assert.ok(focused.includes("[dashboard]"));
-});
-
-test("renderFrame highlights the focused panel header", () => {
-  const agents = roles.map((r, i) => agent(r, i === 1 ? "spinner" : "blank", null));
-  const focusedAgents = renderFrame(model("dashboard", agents, 1, { focus: "agents" })).join("\n");
-  const focusedDetail = renderFrame(model("dashboard", agents, 1, { focus: "detail" })).join("\n");
-  assert.ok(focusedAgents.includes("Agents"));
-  assert.ok(focusedDetail.includes("Detail — coder"));
-});

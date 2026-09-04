@@ -1,7 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
-export const INSTALLED_BUNDLE_REL = path.join(".swarmforge", "tui", "swarm-tui.js");
+export const INSTALLED_BUNDLE_REL = path.join(".swarmforge", "tui", "swarm-tui");
 
 export type InstallOutcome =
   | { status: "installed"; target: string }
@@ -28,6 +28,9 @@ export function installTuiBundle(sourceBundle: string, projectRoot: string): Ins
   }
   mkdirSync(path.dirname(target), { recursive: true });
   copyFileSync(sourceBundle, target);
+  // The published artifact is an executable; copyFileSync does not carry
+  // the mode across every filesystem.
+  chmodSync(target, 0o755);
   return { status: "installed", target };
 }
 

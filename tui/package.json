@@ -2,16 +2,20 @@
   "name": "swarm-tui",
   "private": true,
   "type": "module",
-  "description": "SwarmForge terminal dashboard. Runs on Node native TypeScript type stripping.",
+  "description": "SwarmForge terminal dashboard. OpenTUI on Bun, shipped as a standalone binary.",
   "scripts": {
-    "build": "esbuild main.ts --bundle --platform=node --format=esm --banner:js=\"import { createRequire as __cR } from 'module'; const require = __cR(import.meta.url);\" --outfile=dist/swarm-tui.js",
-    "test": "node --test test/*.test.ts",
-    "test:property": "node --test test/property/*.test.ts"
+    "build": "bun run build.ts",
+    "test": "bun test test/",
+    "test:property": "bun test test/property/"
   },
   "dependencies": {
     "@langfuse/otel": "^5.11.0",
     "@langfuse/tracing": "^5.11.0",
     "@opentelemetry/sdk-node": "^0.222.0",
+    "@opentui/core": "^0.5.10",
     "pino": "^10.3.1"
+  },
+  "devDependencies": {
+    "bun": "^1.4.1"
   }
 }

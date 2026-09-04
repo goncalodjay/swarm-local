@@ -328,12 +328,13 @@ def run_main(root: str):
 
 
 def run_tui(root: str):
-    tui_bundle = Path(root) / ".swarmforge" / "tui" / "swarm-tui.js"
+    tui_bundle = Path(root) / ".swarmforge" / "tui" / "swarm-tui"
     if not tui_bundle.exists():
         fail(f"TUI bundle not found at {tui_bundle}")
     print(f"{GREEN}Starting SwarmForge TUI in {RESET}{root}")
     os.chdir(str(root))
-    os.execvp("node", ["node", str(tui_bundle)])
+    # The TUI is a self-contained binary; it needs no interpreter on PATH.
+    os.execv(str(tui_bundle), [str(tui_bundle)])
 
 
 def test_parse(root: str):

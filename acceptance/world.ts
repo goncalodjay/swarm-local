@@ -5,7 +5,10 @@ import { App, type TuiIO } from "../tui/src/app.ts";
 import { parseRoles } from "../tui/src/roles.ts";
 import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
 import { appendLogEntry, logPathForRoot } from "../tui/src/log.ts";
-import { frameModel, renderFrame, renderHelpBox } from "../tui/src/render.ts";
+import { frameModel, helpLines } from "../tui/src/render.ts";
+import { createTestRenderer } from "@opentui/core/testing";
+import { FrameMount } from "../tui/src/ui/dashboard.ts";
+import { selectTheme } from "../tui/src/theme.ts";
 import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../tui/src/types.ts";
 import { installTuiBundle, type InstallOutcome } from "../tui/src/install.ts";
 import { launchInstalledTui } from "../tui/test/helpers/launch-installed-tui.ts";
@@ -204,10 +207,29 @@ export function writeUserNote(world: World, role: string): void {
   writeFileSync(file, `id: note_${role}\nfrom: ${role}\nto: user\npriority: 50\ntype: note\nmessage: human help requested\ncreated_at: 2026-08-10T22:41:00Z\n\nRe-read your role and constitution.\n`);
 }
 
-export function captureFrame(world: World): void {
-  world.frame = renderFrame(frameModel(world.app));
-  world.rendered = world.frame.join("\n");
-  world.helpOverlay = world.app.helpOpen ? renderHelpBox(world.size.cols, world.app.focus).join("\n") : "";
+/**
+ * Render the current application state through the real OpenTUI pipeline
+ * and store the resulting frame on the world.
+ *
+ * Acceptance assertions run against the same renderer the shipped binary
+ * uses, so a layout regression fails here rather than in a terminal.
+ */
+export async function captureFrame(world: World): Promise<void> {
+  const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+    width: world.size.cols,
+    height: world.size.rows,
+  });
+  const mount = new FrameMount(renderer, selectTheme({}));
+  try {
+    mount.update(frameModel(world.app));
+    await renderOnce();
+    world.rendered = captureCharFrame();
+    world.frame = world.rendered.split("\n");
+  } finally {
+    mount.destroy();
+    renderer.destroy();
+  }
+  world.helpOverlay = world.app.helpOpen ? helpLines(world.app.focus).join("\n") : "";
 }
 
 export interface ParsedRow {
@@ -217,17 +239,26 @@ export interface ParsedRow {
   task: string | null;
 }
 
+/**
+ * Parse an agent row out of a rendered frame line.
+ *
+ * A frame line is a series of panel cells separated by vertical borders,
+ * for example `" | >   specifier      | | Task: ..."`. Each cell carries
+ * one column of padding, so the row content starts at the second
+ * character of its cell.
+ */
 export function parseAgentRow(line: string): ParsedRow | null {
-  const content = line.replace(/^[│├└┌] /, "");
-  const left = content.includes("│") ? content.slice(0, content.indexOf("│")) : content;
-  const match = /^([ >]) (.) (\S+)( .*)?$/.exec(left.trimEnd());
-  if (!match) return null;
-  return {
-    selected: match[1] === ">",
-    marker: match[2],
-    role: match[3],
-    task: match[4] ? match[4].trim() : null,
-  };
+  for (const cell of line.split("│")) {
+    const match = /^ ([ >]) (.) (\S+)( .*)?$/.exec(cell.trimEnd());
+    if (!match) continue;
+    return {
+      selected: match[1] === ">",
+      marker: match[2]!,
+      role: match[3]!,
+      task: match[4] ? match[4].trim() : null,
+    };
+  }
+  return null;
 }
 
 export function findAgentRow(world: World, role: string): ParsedRow {
@@ -261,11 +292,11 @@ export function logLines(world: World): string[] {
 }
 
 export function swarmLocalBundlePath(world: World): string {
-  return path.join(world.swarmLocalDir, "tui", "dist", "swarm-tui.js");
+  return path.join(world.swarmLocalDir, "tui", "dist", "swarm-tui");
 }
 
 export function installedBundlePath(world: World): string {
-  return path.join(world.projectDir, ".swarmforge", "tui", "swarm-tui.js");
+  return path.join(world.projectDir, ".swarmforge", "tui", "swarm-tui");
 }
 
 export function writeSwarmLocalBundle(world: World, content: string): void {

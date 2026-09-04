@@ -39,9 +39,9 @@ function agentsPanelRoles(world: World): string[] {
   return roles;
 }
 
-function refreshAndCapture(world: World): void {
+async function refreshAndCapture(world: World): Promise<void> {
   world.app.refreshAgents();
-  captureFrame(world);
+  await captureFrame(world);
 }
 
 function roleRowText(world: World, role: string): string {
@@ -65,7 +65,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^a running swarm with the configured roles$/,
-    run: (world) => {
+    run: async (world) => {
       startSwarm(world);
       world.app.start();
     },
@@ -75,7 +75,7 @@ export function createHandlers(): Handler[] {
     pattern: /^the TUI starts$/,
     run: async (world) => {
       world.app.start();
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -99,29 +99,29 @@ export function createHandlers(): Handler[] {
     run: async (world) => {
       world.app.start();
       assert.equal(world.app.view, "dashboard");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the TUI renders the dashboard$/,
-    run: (world) => {
+    run: async (world) => {
       assert.equal(world.app.view, "dashboard");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the TUI shows the terminal-too-small screen$/,
-    run: (world) => {
+    run: async (world) => {
       assert.equal(world.app.view, "too-small");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the agents panel lists the configured roles in order$/,
-    run: (world) => {
+    run: async (world) => {
       const expected = world.app.roles.map((r) => r.role);
       assert.deepEqual(agentsPanelRoles(world), expected);
     },
@@ -129,7 +129,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the menu bar shows entries for dashboard, each role, logs and costs$/,
-    run: (world) => {
+    run: async (world) => {
       for (const entry of ["[dashboard]", "[specifier]", "[coder]", "[reviewer]", "[architect]", "(logs)", "(costs)"]) {
         assert.ok(world.rendered.includes(entry), `menu bar missing ${entry}`);
       }
@@ -138,7 +138,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the logs and costs entries are shown as disabled$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.rendered.includes("(logs)"));
       assert.ok(world.rendered.includes("(costs)"));
     },
@@ -146,47 +146,47 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the footer shows the available keybindings$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.rendered.includes("↑/↓ select"));
     },
   });
 
   handlers.push({
     pattern: /^the agent (\S+) has the handoff state (one handoff in process)$/,
-    run: (world, _step, _example, [role]) => {
+    run: async (world, _step, _example, [role]) => {
       writeInProcessHandoff(world, role, "task");
     },
   });
 
   handlers.push({
     pattern: /^the agent (\S+) has the handoff state (completed tasks and nothing pending)$/,
-    run: (world, _step, _example, [role]) => {
+    run: async (world, _step, _example, [role]) => {
       writeCompletedHandoff(world, role, "done");
     },
   });
 
   handlers.push({
     pattern: /^the agent (\S+) has the handoff state (nothing completed and nothing pending)$/,
-    run: () => {},
+    run: async () => {},
   });
 
   handlers.push({
     pattern: /^the agent (\S+) has the handoff state (a pending note to the user)$/,
-    run: (world, _step, _example, [role]) => {
+    run: async (world, _step, _example, [role]) => {
       writeUserNote(world, role);
     },
   });
 
   handlers.push({
     pattern: /^the agent (\S+) has an in-process handoff for task (\S+)$/,
-    run: (world, _step, _example, [role, task]) => {
+    run: async (world, _step, _example, [role, task]) => {
       writeInProcessHandoff(world, role, task);
     },
   });
 
   handlers.push({
     pattern: /^the (\S+) row shows the (\S+) marker$/,
-    run: (world, _step, _example, [role, marker]) => {
+    run: async (world, _step, _example, [role, marker]) => {
       const row = findAgentRow(world, role);
       assert.equal(row.marker, markerForName(marker), `marker for ${role}`);
     },
@@ -194,42 +194,42 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the detail pane shows the task (\S+)$/,
-    run: (world, _step, _example, [task]) => {
+    run: async (world, _step, _example, [task]) => {
       assert.ok(world.rendered.includes(`Task: ${task}`), `detail pane missing task ${task}`);
     },
   });
 
   handlers.push({
     pattern: /^the detail pane shows the current state$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.rendered.includes("State:"), "detail pane missing current state");
     },
   });
 
   handlers.push({
     pattern: /^the detail pane shows the handoff timestamps$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.rendered.includes("Timestamps:"), "detail pane missing timestamps");
     },
   });
 
   handlers.push({
     pattern: /^the detail pane shows the recent handoff events$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.rendered.includes("Recent events:"), "detail pane missing recent events");
     },
   });
 
   handlers.push({
     pattern: /^the coder row shows the task name (\S+)$/,
-    run: (world, _step, _example, [task]) => {
+    run: async (world, _step, _example, [task]) => {
       assert.ok(roleRowText(world, "coder").includes(task));
     },
   });
 
   handlers.push({
     pattern: /^the coder row shows a blank status$/,
-    run: (world) => {
+    run: async (world) => {
       const row = findAgentRow(world, "coder");
       assert.equal(row.marker, " ");
     },
@@ -237,19 +237,19 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the selection is on (\S+)$/,
-    run: (world, _step, _example, [role]) => {
+    run: async (world, _step, _example, [role]) => {
       world.app.refreshAgents();
       const index = world.app.agents.findIndex((a) => a.role === role);
       assert.ok(index >= 0, `unknown role ${role}`);
       world.app.selection = index;
       world.app.focus = "agents";
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the selection moves to (\S+)$/,
-    run: (world, _step, _example, [role]) => {
+    run: async (world, _step, _example, [role]) => {
       const agent = world.app.agents[world.app.selection];
       assert.ok(agent, "no selected agent");
       assert.equal(agent.role, role);
@@ -260,7 +260,7 @@ export function createHandlers(): Handler[] {
     pattern: /^I press (down|up)$/,
     run: async (world, _step, _example, [key]) => {
       await world.app.press(key as "down" | "up");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -268,7 +268,7 @@ export function createHandlers(): Handler[] {
     pattern: /^I press enter$/,
     run: async (world) => {
       await world.app.press("enter");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -276,7 +276,7 @@ export function createHandlers(): Handler[] {
     pattern: /^I press ctrl\+k$/,
     run: async (world) => {
       await world.app.press("ctrl+k");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -284,7 +284,7 @@ export function createHandlers(): Handler[] {
     pattern: /^I press esc$/,
     run: async (world) => {
       await world.app.press("esc");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -292,7 +292,7 @@ export function createHandlers(): Handler[] {
     pattern: /^I press tab (\d+) times$/,
     run: async (world, _step, _example, [times]) => {
       for (let i = 0; i < Number(times); i++) await world.app.press("tab");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -301,7 +301,7 @@ export function createHandlers(): Handler[] {
     run: async (world, _step, _example, [key]) => {
       const mapping: Record<string, Key> = { j: "j", k: "k", Home: "home", End: "end", g: "g", G: "G" };
       await world.app.press(mapping[key]);
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -309,7 +309,7 @@ export function createHandlers(): Handler[] {
     pattern: /^I press (left|right)$/,
     run: async (world, _step, _example, [key]) => {
       await world.app.press(key as "left" | "right");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -317,69 +317,69 @@ export function createHandlers(): Handler[] {
     pattern: /^I press \?$/,
     run: async (world) => {
       await world.app.press("?");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the focus is on (agents|detail|menu)$/,
-    run: (world, step, _example, [panel]) => {
+    run: async (world, step, _example, [panel]) => {
       const focus = panel as "agents" | "detail" | "menu";
       if (step.keyword.trim() === "Then") {
         assert.equal(world.app.focus, focus);
       } else {
         world.app.focus = focus;
-        captureFrame(world);
+        await captureFrame(world);
       }
     },
   });
 
   handlers.push({
     pattern: /^the menu focus is on (dashboard|specifier|coder|reviewer|architect|logs|costs)$/,
-    run: (world, step, _example, [item]) => {
+    run: async (world, step, _example, [item]) => {
       const index = menuItemIndex(menuItems(world.app.roles), item);
       if (step.keyword.trim() === "Then") {
         assert.equal(world.app.menuFocus, index, `menu focus should be ${item}`);
       } else {
         world.app.menuFocus = index;
-        captureFrame(world);
+        await captureFrame(world);
       }
     },
   });
 
   handlers.push({
     pattern: /^the footer shows "([^"]+)"$/,
-    run: (world, _step, _example, [text]) => {
+    run: async (world, _step, _example, [text]) => {
       assert.ok(world.rendered.includes(text), `footer missing ${text}`);
     },
   });
 
   handlers.push({
     pattern: /^a hint "([^"]+): not implemented" is shown in the footer$/,
-    run: (world, _step, _example, [item]) => {
+    run: async (world, _step, _example, [item]) => {
       assert.ok(world.rendered.includes(`${item}: not implemented`), `hint missing ${item}`);
     },
   });
 
   handlers.push({
     pattern: /^the help overlay is shown$/,
-    run: (world) => {
+    run: async (world) => {
       assert.equal(world.app.helpOpen, true);
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the help overlay is closed$/,
-    run: (world) => {
+    run: async (world) => {
       assert.equal(world.app.helpOpen, false);
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the help overlay shows "([^"]+)"$/,
-    run: (world, _step, _example, [key]) => {
+    run: async (world, _step, _example, [key]) => {
       assert.ok(world.helpOverlay.includes(key), `help overlay missing ${key}`);
     },
   });
@@ -388,13 +388,13 @@ export function createHandlers(): Handler[] {
     pattern: /^I press q$/,
     run: async (world) => {
       await world.app.press("quit");
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the terminal attaches to the tmux session (\S+) on the swarm socket$/,
-    run: (world, _step, _example, [session]) => {
+    run: async (world, _step, _example, [session]) => {
       assert.equal(world.attachCalls.length, 1);
       assert.equal(world.attachCalls[0].session, session);
       assert.equal(world.attachCalls[0].socket, world.socket);
@@ -421,7 +421,7 @@ export function createHandlers(): Handler[] {
       world.detach();
       await pendingAttach;
       world.pendingAttach = null;
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -433,7 +433,7 @@ export function createHandlers(): Handler[] {
       world.endSession(message);
       await pendingAttach;
       world.pendingAttach = null;
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
@@ -447,20 +447,20 @@ export function createHandlers(): Handler[] {
       world.resolveAttach({ code: Number(code), reason: "" });
       await pendingAttach;
       world.pendingAttach = null;
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^an error message shows "([^"]+)"$/,
-    run: (world, _step, _example, [message]) => {
+    run: async (world, _step, _example, [message]) => {
       assert.ok(world.rendered.includes(message), `frame missing error message ${message}`);
     },
   });
 
   handlers.push({
     pattern: /^the file (\S+) exists$/,
-    run: (world, _step, _example, [file]) => {
+    run: async (world, _step, _example, [file]) => {
       const expected = path.isAbsolute(file) ? file : path.join(world.root, file);
       assert.ok(existsSync(expected), `expected file ${expected} to exist`);
     },
@@ -468,14 +468,14 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the log contains a tui_start event$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(logLines(world).some((line) => line.includes("tui_start")), "log missing tui_start event");
     },
   });
 
   handlers.push({
     pattern: /^the log contains an attach_start event for session (\S+)$/,
-    run: (world, _step, _example, [session]) => {
+    run: async (world, _step, _example, [session]) => {
       assert.ok(
         logLines(world).some((line) => line.includes("attach_start") && line.includes(`session=${session}`)),
         `log missing attach_start for ${session}`,
@@ -485,7 +485,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the log contains an attach_end event for session (\S+) with reason ""$/,
-    run: (world, _step, _example, [session]) => {
+    run: async (world, _step, _example, [session]) => {
       assert.ok(
         logLines(world).some(
           (line) => line.includes("attach_end") && line.includes(`session=${session}`) && line.includes("reason=") && !line.includes('reason="'),
@@ -497,7 +497,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the log contains an attach_end event for session (\S+) with reason "([^"]+)"$/,
-    run: (world, _step, _example, [session, message]) => {
+    run: async (world, _step, _example, [session, message]) => {
       assert.ok(
         logLines(world).some((line) => line.includes("attach_end") && line.includes(`session=${session}`) && line.includes(`reason="${message}"`)),
         `log missing attach_end with reason ${message} for ${session}`,
@@ -507,7 +507,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the log contains an attach_end event for session (\S+) with reason matching "([^"]+)"$/,
-    run: (world, _step, _example, [session, pattern]) => {
+    run: async (world, _step, _example, [session, pattern]) => {
       const re = new RegExp(pattern);
       assert.ok(
         attachEndLines(world, session).some((line) => {
@@ -521,7 +521,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the log contains an attach_end event for session (\S+) with field (\w+)="([^"]+)"$/,
-    run: (world, _step, _example, [session, field, expected]) => {
+    run: async (world, _step, _example, [session, field, expected]) => {
       assert.ok(
         attachEndLines(world, session).some((line) => logFieldValue(line, field) === expected),
         `log missing attach_end with field ${field}="${expected}" for ${session}`,
@@ -531,7 +531,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the log contains a socket_check event reporting unavailable$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(
         logLines(world).some((line) => line.includes("socket_check") && line.includes("unavailable")),
         "log missing socket_check unavailable event",
@@ -541,53 +541,53 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the dashboard shows the error "([^"]+)"$/,
-    run: (world, _step, _example, [message]) => {
+    run: async (world, _step, _example, [message]) => {
       assert.ok(world.rendered.includes(message), `dashboard missing error ${message}`);
     },
   });
 
   handlers.push({
     pattern: /^the error banner remains after the next poll$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.app.attachError, "no attach error to keep");
       world.app.poll();
-      captureFrame(world);
+      await captureFrame(world);
       assert.ok(world.rendered.includes(world.app.attachError as string), "error banner lost after poll");
     },
   });
 
   handlers.push({
     pattern: /^an attach error "([^"]+)" is displayed$/,
-    run: (world, _step, _example, [message]) => {
+    run: async (world, _step, _example, [message]) => {
       world.app.attachError = message;
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the dashboard does not show the error "([^"]+)"$/,
-    run: (world, _step, _example, [message]) => {
+    run: async (world, _step, _example, [message]) => {
       assert.ok(!world.rendered.includes(message), `dashboard still shows error ${message}`);
     },
   });
 
   handlers.push({
     pattern: /^the TUI exits$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.quitCalls > 0);
     },
   });
 
   handlers.push({
     pattern: /^the terminal is restored to its previous state$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.restoreCalls > 0);
     },
   });
 
   handlers.push({
     pattern: /^the status poll interval is 1 second$/,
-    run: () => {},
+    run: async () => {},
   });
 
   handlers.push({
@@ -597,16 +597,16 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^a handoff for task (\S+) lands in the coder in-process inbox$/,
-    run: (world, _step, _example, [task]) => {
+    run: async (world, _step, _example, [task]) => {
       writeInProcessHandoff(world, "coder", task);
     },
   });
 
   handlers.push({
     pattern: /^the next status poll renders the coder row with a spinner and the task (\S+)$/,
-    run: (world, _step, _example, [task]) => {
+    run: async (world, _step, _example, [task]) => {
       world.app.poll();
-      captureFrame(world);
+      await captureFrame(world);
       const row = findAgentRow(world, "coder");
       assert.equal(row.marker, "◐");
       assert.ok(roleRowText(world, "coder").includes(task));
@@ -615,23 +615,23 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the swarm socket does not exist$/,
-    run: (world) => {
+    run: async (world) => {
       world.socketOk = false;
     },
   });
 
   handlers.push({
     pattern: /^the swarm socket becomes unreadable$/,
-    run: (world) => {
+    run: async (world) => {
       world.socketOk = false;
       world.app.poll();
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^an error screen reports that the swarm is unavailable$/,
-    run: (world) => {
+    run: async (world) => {
       assert.equal(world.app.view, "error");
       assert.ok(world.rendered.includes("Swarm unavailable"));
     },
@@ -644,16 +644,16 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the terminal size is (\d+) columns by (\d+) rows$/,
-    run: (world, _step, _example, [cols, rows]) => {
+    run: async (world, _step, _example, [cols, rows]) => {
       world.size = { cols: Number(cols), rows: Number(rows) };
       world.app.poll();
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^a terminal-too-small screen shows the current size (\d+)x(\d+) and the required size 100x30$/,
-    run: (world, _step, _example, [cols, rows]) => {
+    run: async (world, _step, _example, [cols, rows]) => {
       assert.equal(world.app.view, "too-small");
       assert.ok(world.rendered.includes(`${cols}x${rows}`));
       assert.ok(world.rendered.includes("100x30"));
@@ -662,16 +662,16 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the terminal is resized to (\d+) columns by (\d+) rows$/,
-    run: (world, _step, _example, [cols, rows]) => {
+    run: async (world, _step, _example, [cols, rows]) => {
       world.size = { cols: Number(cols), rows: Number(rows) };
       world.app.poll();
-      captureFrame(world);
+      await captureFrame(world);
     },
   });
 
   handlers.push({
     pattern: /^the state files for the agent coder are missing or malformed$/,
-    run: (world) => {
+    run: async (world) => {
       const coder = world.app.roles.find((r) => r.role === "coder");
       assert.ok(coder, "coder role not configured");
       const inbox = path.join(coder.worktreePath, ".swarmforge", "handoffs", "inbox");
@@ -681,33 +681,33 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^a project directory without SwarmForge installed$/,
-    run: () => {},
+    run: async () => {},
   });
 
   handlers.push({
     pattern: /^the swarm-local TUI bundle exists at tui\/dist\/swarm-tui\.js$/,
-    run: (world) => {
+    run: async (world) => {
       writeSwarmLocalBundle(world, markerWritingBundle(world));
     },
   });
 
   handlers.push({
     pattern: /^the swarm-local TUI bundle does not exist$/,
-    run: (world) => {
+    run: async (world) => {
       removeSwarmLocalBundle(world);
     },
   });
 
   handlers.push({
     pattern: /^SwarmForge is initialized in the project directory$/,
-    run: (world) => {
+    run: async (world) => {
       runSwarmInitInstall(world);
     },
   });
 
   handlers.push({
     pattern: /^I run swarm-init in the project directory$/,
-    run: (world) => {
+    run: async (world) => {
       runSwarmInitInstall(world);
     },
   });
@@ -721,14 +721,14 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the file \.swarmforge\/tui\/swarm-tui\.js exists in the project directory$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(existsSync(installedBundlePath(world)), "installed TUI bundle missing");
     },
   });
 
   handlers.push({
     pattern: /^the installed TUI bundle is executed$/,
-    run: (world) => {
+    run: async (world) => {
       assert.equal(world.launchExitCode, 0, "launcher should exit 0");
       assert.ok(existsSync(launchMarkerPath(world)), "installed bundle was not executed");
     },
@@ -736,7 +736,7 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^swarm-init fails$/,
-    run: (world) => {
+    run: async (world) => {
       assert.ok(world.installOutcome, "expected an install outcome");
       assert.notEqual(world.installOutcome?.status, "installed");
     },
@@ -744,21 +744,21 @@ export function createHandlers(): Handler[] {
 
   handlers.push({
     pattern: /^the error reports that the TUI bundle is missing$/,
-    run: (world) => {
+    run: async (world) => {
       assert.equal(world.installOutcome?.status, "bundle_missing");
     },
   });
 
   handlers.push({
     pattern: /^a TUI bundle already exists at \.swarmforge\/tui\/swarm-tui\.js$/,
-    run: (world) => {
+    run: async (world) => {
       createInstalledBundle(world, "pre-existing-bundle-content");
     },
   });
 
   handlers.push({
     pattern: /^the existing TUI bundle remains unchanged$/,
-    run: (world) => {
+    run: async (world) => {
       const target = installedBundlePath(world);
       assert.ok(existsSync(target), "installed TUI bundle missing");
       assert.equal(readFileSync(target, "utf8"), "pre-existing-bundle-content");

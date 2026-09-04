@@ -2,5 +2,8 @@
   "name": "swarm-acceptance",
   "private": true,
   "type": "module",
-  "description": "Project-specific acceptance pipeline components (entrypoint generator, runtime, step handlers, runner adapter)."
+  "description": "Project-specific acceptance pipeline components (entrypoint generator, runtime, step handlers, runner adapter).",
+  "dependencies": {
+    "@opentui/core": "^0.5.10"
+  }
 }

@@ -1,10 +1,18 @@
+/**
+ * Frame model and text formatting.
+ *
+ * This module is pure: it turns application state into plain strings and
+ * never emits escape sequences. All color and layout live in the OpenTUI
+ * layer (`ui/dashboard.ts`), which reads these strings and styles them
+ * with theme tokens. Keeping the two apart means the wording can be tested
+ * without a terminal, and the styling can change without touching wording.
+ */
+
 import { REQUIRED_SIZE, type App } from "./app.ts";
 import { isDisabledMenuItem, MENU_DASHBOARD, menuItems } from "./menu.ts";
-import { createStyle, detectColors, padVisible, stripAnsi, type Style } from "./style.ts";
 import type { AgentState, FocusTarget, HandoffInfo, Mode, Role, Status, TerminalSize } from "./types.ts";
 
-const style: Style = createStyle({ colors: detectColors() });
-
+/** Width of the agents panel, in columns. */
 export const PANEL_WIDTH = 30;
 
 export interface FrameModel {
@@ -101,27 +109,64 @@ function pushEvents(events: HandoffEvent[], h: HandoffInfo, state: string): void
   if (h.completed_at) events.push({ at: h.completed_at, label: "completed", task: h.task });
 }
 
+/** Title shown in the top border of the frame. */
+export const APP_TITLE = "SwarmForge TUI";
+
+/** Segments of the header line, so each can carry its own emphasis. */
+export interface HeaderSegments {
+  socket: string;
+  poll: string;
+  herdr: string;
+  /** True when herdr matched no agent, which the UI warns about. */
+  herdrDegraded: boolean;
+  size: string;
+}
+
+export function headerSegments(model: FrameModel): HeaderSegments {
+  return {
+    socket: model.socket === "" ? "socket: —" : `socket: ${model.socket}`,
+    poll: "poll 1s",
+    herdr: `herdr: ${model.herdrMatched}/${model.herdrTotal} matched`,
+    herdrDegraded: model.herdrMatched === 0,
+    size: `${model.terminalSize.cols}x${model.terminalSize.rows}`,
+  };
+}
+
 export function renderHeader(model: FrameModel): string {
-  const socket = model.socket === "" ? "socket: —" : `socket: ${model.socket}`;
-  const size = `${model.terminalSize.cols}x${model.terminalSize.rows}`;
-  const herdrLabel = model.herdrMatched === 0
-    ? style.yellow(`herdr: 0/${model.herdrTotal} matched`)
-    : `herdr: ${model.herdrMatched}/${model.herdrTotal} matched`;
-  return `${style.bold(style.cyan("SwarmForge TUI"))} · ${socket} · poll 1s · ${herdrLabel} · ${size}`;
+  const s = headerSegments(model);
+  return `${APP_TITLE} · ${s.socket} · ${s.poll} · ${s.herdr} · ${s.size}`;
+}
+
+/** One entry of the menu bar, already decorated with its brackets. */
+export interface MenuEntry {
+  item: string;
+  text: string;
+  disabled: boolean;
+  active: boolean;
+  isDashboard: boolean;
+}
+
+export function menuEntries(
+  roles: Role[],
+  focus: FocusTarget = "agents",
+  menuFocus = 0,
+): MenuEntry[] {
+  return menuItems(roles).map((item, index) => {
+    const disabled = isDisabledMenuItem(item);
+    return {
+      item,
+      text: disabled ? `(${item})` : `[${item}]`,
+      disabled,
+      active: focus === "menu" && index === menuFocus,
+      isDashboard: item === MENU_DASHBOARD,
+    };
+  });
 }
 
 export function renderMenuBar(roles: Role[], focus: FocusTarget = "agents", menuFocus = 0): string {
-  return menuItems(roles)
-    .map((item, index) => renderMenuItem(item, focus === "menu" && index === menuFocus))
+  return menuEntries(roles, focus, menuFocus)
+    .map((entry) => entry.text)
     .join(" ");
-}
-
-function renderMenuItem(item: string, active: boolean): string {
-  const text = isDisabledMenuItem(item) ? `(${item})` : `[${item}]`;
-  if (active) return style.bold(style.cyan(text));
-  if (isDisabledMenuItem(item)) return style.dim(text);
-  if (item === MENU_DASHBOARD) return style.bold(text);
-  return text;
 }
 
 export function renderAgentRow(agent: AgentState, selected: boolean): string {
@@ -135,35 +180,54 @@ export function renderAgentsPanel(agents: AgentState[], selection: number): stri
   return agents.map((agent, index) => renderAgentRow(agent, index === selection));
 }
 
-export function renderDetailPane(agent: AgentState | null): string[] {
-  if (!agent) return ["No agent selected"];
-  const lines: string[] = [];
-  lines.push(`Detail — ${agent.role}`);
-  lines.push(`Task: ${agent.task ?? "—"}`);
-  lines.push(`State: ${style.statusColor(agent.status)(statusLabel(agent.status))}`);
+/** A detail line plus the semantic role its value carries. */
+export interface DetailLine {
+  text: string;
+  tone: "default" | "muted" | "status";
+  status?: Status;
+}
+
+export function detailLines(agent: AgentState | null): DetailLine[] {
+  if (!agent) return [{ text: "No agent selected", tone: "muted" }];
+  const lines: DetailLine[] = [];
+  lines.push({ text: `Task: ${agent.task ?? "—"}`, tone: "default" });
+  lines.push({ text: `State: ${statusLabel(agent.status)}`, tone: "status", status: agent.status });
   if (agent.herdrStatus !== null) {
-    lines.push(`Herdr: ${agent.herdrStatus}`);
+    lines.push({ text: `Herdr: ${agent.herdrStatus}`, tone: "default" });
   } else {
-    lines.push(`Herdr: ${style.dim("not detected (no agent in this worktree)")}`);
+    lines.push({ text: "Herdr: not detected (no agent in this worktree)", tone: "muted" });
   }
   if (agent.terminalTitle) {
-    lines.push(`Title: ${agent.terminalTitle}`);
+    lines.push({ text: `Title: ${agent.terminalTitle}`, tone: "default" });
   }
   const ip = agent.handoffs.inProcess[0];
   if (ip) {
-    lines.push("Timestamps:");
-    lines.push(`  created:   ${ip.created_at ?? "—"}`);
-    lines.push(`  dequeued:  ${ip.dequeued_at ?? "—"}`);
-    lines.push(`  completed: ${ip.completed_at ?? "—"}`);
+    lines.push({ text: "Timestamps:", tone: "default" });
+    lines.push({ text: `  created:   ${ip.created_at ?? "—"}`, tone: "muted" });
+    lines.push({ text: `  dequeued:  ${ip.dequeued_at ?? "—"}`, tone: "muted" });
+    lines.push({ text: `  completed: ${ip.completed_at ?? "—"}`, tone: "muted" });
   }
   const events = snapshotEvents(agent.handoffs);
   if (events.length > 0) {
-    lines.push("Recent events:");
+    lines.push({ text: "Recent events:", tone: "default" });
     for (const event of events.slice(0, 6)) {
-      lines.push(`  ${event.at} ${event.label}${event.task ? " " + event.task : ""}`);
+      lines.push({
+        text: `  ${event.at} ${event.label}${event.task ? " " + event.task : ""}`,
+        tone: "muted",
+      });
     }
   }
   return lines;
+}
+
+/** Title of the detail panel for the selected agent. */
+export function detailTitle(agent: AgentState | null): string {
+  return agent ? `Detail — ${agent.role}` : "Detail";
+}
+
+export function renderDetailPane(agent: AgentState | null): string[] {
+  if (!agent) return ["No agent selected"];
+  return [detailTitle(agent), ...detailLines(agent).map((line) => line.text)];
 }
 
 export function renderLegend(): string {
@@ -190,114 +254,21 @@ export function renderTooSmall(current: TerminalSize, required: TerminalSize): s
   ];
 }
 
-function contentRow(left: string, right: string, inner: number): string {
-  const rightWidth = inner - PANEL_WIDTH - 2;
-  return `│ ${padVisible(left, PANEL_WIDTH - 1)}│ ${padVisible(right, rightWidth)}│`;
-}
+/** Rows of the help overlay, as label/keys pairs. */
+export const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ["Motion", "↑/↓ · j/k   select"],
+  ["Jump", "Home/End · g/G"],
+  ["Menu", "←/→ · Enter  select"],
+  ["Ctrl+k", "Tab   cycle focus"],
+  ["Ctrl+k", "?     help"],
+  ["Ctrl+k", "q     quit"],
+  ["Esc", "cancel"],
+];
 
-function dividerRow(cols: number, joint: string): string {
-  const inner = cols - 2;
-  return `├${"─".repeat(PANEL_WIDTH)}${joint}${"─".repeat(inner - PANEL_WIDTH - 1)}┤`;
-}
-
-function bottomBorder(cols: number): string {
-  return `└${"─".repeat(cols - 2)}┘`;
-}
-
-function panelTitle(text: string, focused: boolean): string {
-  return focused ? style.bold(style.cyan(text)) : text;
-}
-
-function renderDashboard(model: FrameModel): string[] {
-  const cols = Math.max(model.terminalSize.cols, REQUIRED_SIZE.cols);
-  const inner = cols - 2;
-  const lines: string[] = [];
-  lines.push(`┌${"─".repeat(inner)}┐`);
-  lines.push(`│ ${padVisible(renderHeader(model), inner - 1)}│`);
-  lines.push(`├${"─".repeat(inner)}┤`);
-  lines.push(`│ ${padVisible(renderMenuBar(model.roles, model.focus, model.menuFocus), inner - 1)}│`);
-  lines.push(dividerRow(cols, "┬"));
-
-  const agents = renderAgentsPanel(model.agents, model.selection);
-  const detail = renderDetailPane(model.agents[model.selection] ?? null);
-  const detailTitle = detail[0] ?? "";
-  lines.push(contentRow(panelTitle("Agents", model.focus === "agents"), panelTitle(detailTitle, model.focus === "detail"), inner));
-
-  const bodyHeight = Math.max(agents.length, detail.length - 1);
-  for (let i = 0; i < bodyHeight; i++) {
-    lines.push(contentRow(agents[i] ?? "", detail[i + 1] ?? "", inner));
-  }
-
-  lines.push(dividerRow(cols, "┴"));
-  if (model.attachError) {
-    lines.push(`│ ${padVisible(style.bold(style.red(model.attachError)), inner - 1)}│`);
-  }
-  lines.push(`│ ${padVisible(style.dim(renderLegend()), inner - 1)}│`);
-  lines.push(`│ ${padVisible(renderFooter(model.mode, model.hint, model.helpOpen), inner - 1)}│`);
-  lines.push(bottomBorder(cols));
-  return lines;
-}
-
-export function renderHelpBox(cols: number, focus: FocusTarget): string[] {
-  const width = Math.min(46, cols - 4);
-  const inner = width - 2;
-  const row = (text: string): string => `│ ${padVisible(text, inner - 1)}│`;
+export function helpLines(focus: FocusTarget): string[] {
   return [
-    `┌${"─".repeat(inner)}┐`,
-    row(`Focus: ${focus}`),
-    `├${"─".repeat(inner)}┤`,
-    row("Motion  ↑/↓ · j/k   select"),
-    row("Jump    Home/End · g/G"),
-    row("Menu    ←/→ · Enter  select"),
-    row("Ctrl+k  Tab   cycle focus"),
-    row("Ctrl+k  ?     help"),
-    row("Ctrl+k  q     quit"),
-    row("Esc     cancel"),
-    `├${"─".repeat(inner)}┤`,
-    row("Close   q · Esc · ?"),
-    `└${"─".repeat(inner)}┘`,
+    `Focus: ${focus}`,
+    ...HELP_ROWS.map(([label, keys]) => `${label.padEnd(8)}${keys}`),
+    "Close   q · Esc · ?",
   ];
-}
-
-function overlayFrame(frame: string[], overlay: string[]): string[] {
-  const result = [...frame];
-  const overlayWidth = overlay.length > 0 ? stripAnsi(overlay[0]).length : 0;
-  const startRow = Math.max(0, Math.floor((frame.length - overlay.length) / 2));
-  for (let i = 0; i < overlay.length; i++) {
-    const row = startRow + i;
-    if (row >= result.length) break;
-    const base = stripAnsi(result[row]);
-    const startCol = Math.max(0, Math.floor((base.length - overlayWidth) / 2));
-    result[row] = base.slice(0, startCol) + overlay[i] + base.slice(startCol + overlayWidth);
-  }
-  return result;
-}
-
-function renderNoticeFrame(cols: number, title: string, body: string[]): string[] {
-  const inner = cols - 2;
-  const lines: string[] = [];
-  lines.push(`┌${"─".repeat(inner)}┐`);
-  lines.push(`│ ${padVisible(style.bold(title), inner - 1)}│`);
-  lines.push(`├${"─".repeat(inner)}┤`);
-  for (const bodyLine of body) {
-    lines.push(`│ ${padVisible(bodyLine, inner - 1)}│`);
-  }
-  lines.push(`├${"─".repeat(inner)}┤`);
-  lines.push(`│ ${padVisible(renderFooter("normal", null, false), inner - 1)}│`);
-  lines.push(bottomBorder(cols));
-  return lines;
-}
-
-export function renderFrame(model: FrameModel): string[] {
-  const cols = Math.max(model.terminalSize.cols, REQUIRED_SIZE.cols);
-  if (model.view === "error") {
-    const message = renderError(model.errorMessage);
-    return renderNoticeFrame(cols, message[0], message.slice(2));
-  }
-  if (model.view === "too-small") {
-    const message = renderTooSmall(model.terminalSize, model.requiredSize);
-    return renderNoticeFrame(cols, message[0], message.slice(2));
-  }
-  const frame = renderDashboard(model);
-  return model.helpOpen ? overlayFrame(frame, renderHelpBox(cols, model.focus)) : frame;
 }
