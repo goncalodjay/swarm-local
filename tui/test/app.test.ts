@@ -16,7 +16,7 @@ function makeRole(role: string, index: number): Role {
   };
 }
 
-const ROLES: Role[] = ["specifier", "coder", "refactorer", "architect"].map(makeRole);
+const ROLES: Role[] = ["specifier", "coder", "reviewer", "architect"].map(makeRole);
 
 function emptySnapshot(): HandoffSnapshot {
   return { queued: [], inProcess: [], completed: [], pendingUserNote: false };
@@ -98,7 +98,7 @@ test("start lists configured roles in order", () => {
   const io = new FakeIO();
   const app = new App(io);
   app.start();
-  assert.deepEqual(app.roles.map((r) => r.role), ["specifier", "coder", "refactorer", "architect"]);
+  assert.deepEqual(app.roles.map((r) => r.role), ["specifier", "coder", "reviewer", "architect"]);
 });
 
 test("startup focus is on the agents panel", () => {

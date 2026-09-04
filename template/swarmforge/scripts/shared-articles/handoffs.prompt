@@ -20,14 +20,27 @@ task: <short-stable-task-name>
 commit: <10-character-commit-abbrev>
 ```
 
-- When your role is an intermediate step in the pack pipeline, always forward
-  a `git_handoff` to the next role in the chain after completing the inbound
-  task, regardless of what changed. Formatting-only, manifest-only, audit-only,
-  generated metadata, and other non-functional churn still require a forward
-  down the chain.
-- When your role sends the end-of-chain handoff to multiple recipients, those
-  recipients merge only (`merge_and_process`). They do not forward that handoff
-  further. Only this terminal broadcast is merge-only without re-forwarding.
+## Routing Table
+The swarm is a cycle. Each role has a fixed set of allowed recipients:
+
+| Sender    | Allowed recipients                          |
+| --------- | ------------------------------------------- |
+| specifier | coder                                       |
+| coder     | reviewer                                    |
+| reviewer  | coder, and one of architect or specifier    |
+| architect | coder, specifier                            |
+
+- Every role may send work to the coder. The coder answers only to the reviewer.
+- The reviewer picks exactly one forward recipient when its review passes:
+  the architect for structurally large changes, the specifier otherwise.
+- A handoff reaching the specifier from the reviewer or the architect means the
+  feature is complete. The specifier merges, opens the PR, marks the feature
+  done, and hands the next approved feature to the coder.
+- Never send to a recipient outside your row. A misrouted handoff stalls the
+  cycle because the specifier never receives its completion signal.
+- Always forward after completing an inbound task, regardless of what changed.
+  Formatting-only, manifest-only, audit-only, generated metadata, and other
+  non-functional churn still require a forward along the cycle.
 - Preserve the received task name when forwarding work for the same task. If the
   handoff starts new work, invent a short stable task name.
 - For `note`, write:

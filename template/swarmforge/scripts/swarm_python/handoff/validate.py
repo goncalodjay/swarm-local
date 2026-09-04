@@ -27,6 +27,57 @@ message: <one line, max 80 chars>
 USAGE = USAGE_TEXT
 
 
+# Cycle routing table. Each role may only hand off to its allowed recipients.
+# specifier -> coder            (whole phased spec)
+# coder     -> reviewer         (every change, whoever sent the work)
+# reviewer  -> coder            (rework)
+#           -> architect | specifier (exactly one, when the review passes)
+# architect -> coder            (adjustments)
+#           -> specifier        (feature complete)
+ROLE_ROUTES = {
+    "specifier": frozenset({"coder"}),
+    "coder": frozenset({"reviewer"}),
+    "reviewer": frozenset({"coder", "architect", "specifier"}),
+    "architect": frozenset({"coder", "specifier"}),
+}
+
+# Recipients a single reviewer handoff may never combine: a passing review goes
+# forward to exactly one of them.
+EXCLUSIVE_FORWARDS = {"reviewer": frozenset({"architect", "specifier"})}
+
+KNOWN_CYCLE_ROLES = frozenset(ROLE_ROUTES)
+
+
+def validate_route(sender, recipients):
+    """Reject handoffs that leave the cycle defined by ROLE_ROUTES.
+
+    Roles outside the standard cycle are not constrained, so projects that add
+    their own roles keep working.
+    """
+    if sender not in ROLE_ROUTES:
+        return []
+    allowed = ROLE_ROUTES[sender]
+    errors = []
+    for r in recipients:
+        if not r or r not in KNOWN_CYCLE_ROLES:
+            continue
+        if r == sender:
+            errors.append(f"Role '{sender}' must not hand off to itself.")
+        elif r not in allowed:
+            errors.append(
+                f"Role '{sender}' may not hand off to '{r}'; "
+                f"allowed recipients are {', '.join(sorted(allowed))}."
+            )
+    exclusive = EXCLUSIVE_FORWARDS.get(sender, frozenset())
+    chosen = exclusive.intersection(recipients)
+    if len(chosen) > 1:
+        errors.append(
+            f"Role '{sender}' must forward to exactly one of "
+            f"{', '.join(sorted(exclusive))}; got {', '.join(sorted(chosen))}."
+        )
+    return errors
+
+
 def validate_recipients(to):
     if not to:
         return [], []
@@ -90,7 +141,7 @@ _VALID_BY_TYPE = {
 }
 
 
-def validate(headers, ordered):
+def validate(headers, ordered, sender=None):
     type_ = headers.get("type", "")
     to = headers.get("to", "")
     priority = headers.get("priority", "")
@@ -165,10 +216,19 @@ def validate(headers, ordered):
     if type_ != "note" and note_message:
         note_errors.append("Header 'message' is only allowed for note.")
 
+    route_errors = validate_route(sender, recipients) if sender else []
+
     return {
         "recipients": recipients,
         "canonical-commit": canonical,
-        "errors": base_errors + recipient_errors + field_errors + git_errors + note_errors,
+        "errors": (
+            base_errors
+            + recipient_errors
+            + field_errors
+            + git_errors
+            + note_errors
+            + route_errors
+        ),
     }
 
 

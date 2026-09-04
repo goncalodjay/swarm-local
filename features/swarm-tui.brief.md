@@ -3,7 +3,7 @@
 ## Goal and context
 
 A terminal dashboard to monitor and navigate the SwarmForge 4-agent swarm
-(specifier, coder, refactorer, architect). Launched as `./swarm tui`, it runs
+(specifier, coder, reviewer, architect). Launched as `./swarm tui`, it runs
 standalone in the current terminal, shows live per-agent status, and lets the
 user attach into any agent's tmux session to watch or help.
 
@@ -31,7 +31,7 @@ Facts established by repository exploration:
   `swarmforge-<role>` via the private socket (child process). Leaving the
   agent view uses the native tmux detach `C-b d`; the child exits and the TUI
   resumes at the dashboard. No custom hotkeys (no Ctrl+Q / Ctrl+Shift+Q).
-- **Menu bar**: `[dashboard] [specifier] [coder] [refactorer] [architect]
+- **Menu bar**: `[dashboard] [specifier] [coder] [reviewer] [architect]
   [logs] [costs]`. "Log out" of an agent = back to dashboard; `q` quits the
   TUI entirely and restores the terminal.
 - **Status model** (from handoff state, polled every 1s, same cadence as

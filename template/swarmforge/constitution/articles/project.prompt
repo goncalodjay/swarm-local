@@ -1,7 +1,7 @@
 # Project Rules
 
 ## Project Shape
-- This project is configured for SwarmForge with four AI-backed agents: specifier, coder, refactorer, and architect. Their CLI backends are configured in `swarmforge/swarmforge.conf`.
+- This project is configured for SwarmForge with four AI-backed agents: specifier, coder, reviewer, and architect. Their CLI backends are configured in `swarmforge/swarmforge.conf`.
 - Project languages: {{LANGUAGES}}.
 - Before changing code, inspect the repository to identify its build, test, formatting, and dependency commands. Use tools already available in the project or on the local machine.
 
@@ -14,6 +14,32 @@
 ## Local Configuration
 - Preserve project-local SwarmForge configuration under `swarmforge/`.
 - Keep swarm state local under `.swarmforge/`, worktrees under `.worktrees/`, and shared scripts under `swarmforge/scripts/`.
+
+## Agent Cycle
+The swarm runs as one cycle per feature, not as a chain of small round trips.
+
+```
+specifier --whole phased spec--> coder
+coder --every change--> reviewer
+reviewer --rework--> coder
+reviewer --contained change--> specifier        (feature complete)
+reviewer --structural change--> architect
+architect --adjustments--> coder                (returns via reviewer)
+architect --architecture sound--> specifier     (feature complete)
+specifier: merge + PR + mark complete + dequeue next approved feature
+```
+
+- The specifier sends only to the coder.
+- The coder sends only to the reviewer, whoever sent it the work.
+- The reviewer sends to the coder for rework, and forward to exactly one of the architect or the specifier when the review passes.
+- The architect sends adjustments to the coder and the completion signal to the specifier.
+- Every role may send work to the coder. Only the specifier closes a feature.
+- A handoff reaching the specifier from the reviewer or the architect means the feature is finished: merge, open the PR, mark it complete, and start the next approved feature automatically.
+
+## Specifications
+- One feature request produces exactly one specification document and one Gherkin file. Never split a request into multiple small feature documents because it touches several technologies or layers.
+- Large work is expressed as ordered phases inside that single spec, progressing skeleton (structure, infrastructure, boundaries) to muscle (real functions, API and database calls, real behavior tests) to skin (security, scalability, architecture).
+- Around 8 phases per feature is the working budget; more requires explicit user approval.
 
 ## Handoffs
 - Prefer terse, explicit handoffs that report state and request role-appropriate review. Do not include verifications or sender process narrative.

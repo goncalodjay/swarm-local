@@ -21,8 +21,8 @@ TEMPLATE_DIR="$SCRIPT_DIR/template"
 OPENCODE_MODELS_FILE="$SCRIPT_DIR/opencode-models.tsv"
 LANGUAGES=""
 TARGET=""
-ROLES=(specifier coder refactorer architect)
-WORKTREES=(master coder refactorer architect)
+ROLES=(specifier coder reviewer architect)
+WORKTREES=(master coder reviewer architect)
 declare -A ROLE_AGENTS ROLE_MODELS ROLE_THINKING
 SUPPORTED_AGENTS=(claude codex copilot grok opencode pi)
 # Flags de auto-aprobación por backend. Pi no pide permisos por herramienta; no necesita flag.

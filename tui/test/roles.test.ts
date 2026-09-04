@@ -5,13 +5,13 @@ import { parseRoles } from "../src/roles.ts";
 const SAMPLE = [
   "specifier\tmaster\t/home/p/spec\t.swarmforge-specifier\tSpecifier\topencode\ttask",
   "coder\tcoder\t/home/p/.worktrees/coder\tswarmforge-coder\tCoder\topencode\ttask",
-  "refactorer\trefactorer\t/home/p/.worktrees/refactorer\tswarmforge-refactorer\tRefactorer\tcodex\ttask",
+  "reviewer\treviewer\t/home/p/.worktrees/reviewer\tswarmforge-reviewer\tReviewer\tcodex\ttask",
   "architect\tarchitect\t/home/p/.worktrees/architect\tswarmforge-architect\tArchitect\topencode\tbatch",
 ].join("\n") + "\n";
 
 test("parseRoles keeps configured role order", () => {
   const roles = parseRoles(SAMPLE);
-  assert.deepEqual(roles.map((r) => r.role), ["specifier", "coder", "refactorer", "architect"]);
+  assert.deepEqual(roles.map((r) => r.role), ["specifier", "coder", "reviewer", "architect"]);
 });
 
 test("parseRoles reads session and display name", () => {

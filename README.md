@@ -58,9 +58,31 @@ Los argumentos posteriores al worktree (`--model`, `--agent`, `--auto`, etc.) se
 
 Ten en cuenta el riesgo: con auto-aprobación, cada agente puede leer, escribir y ejecutar comandos sin confirmación. Los worktrees dan recuperación a nivel git, pero ejecuta el swarm solo en proyectos de confianza. Para una instalación ya inicializada, agrega el flag correspondiente manualmente al final de cada fila de `swarmforge/swarmforge.conf`.
 
+## Ciclo de agentes
+
+El swarm trabaja por ciclos completos de feature, no por idas y vueltas pequeñas.
+
+```
+specifier --spec único y por fases--> coder
+coder     --cada cambio-------------> reviewer
+reviewer  --retrabajo---------------> coder
+reviewer  --cambio contenido--------> specifier   (feature completa)
+reviewer  --cambio estructural------> architect
+architect --ajustes-----------------> coder       (vuelve por el reviewer)
+architect --arquitectura sana-------> specifier   (feature completa)
+specifier: merge + PR + marcar completa + siguiente feature aprobada
+```
+
+- **specifier**: un único documento de especificación por pedido (`features/<nombre>.spec.md`) más un único `.feature`, sin fragmentar por tecnología. El trabajo grande se expresa en fases ordenadas: esqueleto (estructura, infraestructura, límites), músculo (funciones reales, llamadas a APIs y base de datos, tests de comportamiento real) y piel (seguridad, escalabilidad, arquitectura). El presupuesto de trabajo son ~8 fases por feature.
+- **coder**: recibe de cualquier rol, ejecuta el plan de fases completo con TDD y entrega siempre al reviewer.
+- **reviewer**: revisa contra la especificación como base absoluta, ejecuta los tests, se conecta a APIs y bases reales, cubre lo que falte, y reenvía a exactamente uno: architect si el cambio es estructural, specifier si está contenido.
+- **architect**: revisa la arquitectura completa, código muerto y ubicación de archivos; manda ajustes al coder o la señal de cierre al specifier.
+
+El ruteo no es solo una convención de prompts: `swarm_handoff.sh` rechaza los handoffs que salen del ciclo.
+
 ## Configuración por rol
 
-`swarm-init` pregunta para `specifier`, `coder`, `refactorer` y `architect`, en este orden: backend (`claude`, `codex`, `copilot`, `grok`, `opencode` o `pi`), modelo y nivel de thinking/effort. Los cuatro roles pueden usar backends distintos.
+`swarm-init` pregunta para `specifier`, `coder`, `reviewer` y `architect`, en este orden: backend (`claude`, `codex`, `copilot`, `grok`, `opencode` o `pi`), modelo y nivel de thinking/effort. Los cuatro roles pueden usar backends distintos.
 
 Al elegir OpenCode, aparece un menú de modelos legible (por ejemplo, `OpenCode Go — Kimi K3`); el inicializador guarda internamente su identificador canónico sin espacios (`opencode-go/kimi-k3`). El catálogo local está en `opencode-models.tsv`; se actualiza deliberadamente en `swarm-local`, no mediante una descarga durante la inicialización.
 

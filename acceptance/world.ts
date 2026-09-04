@@ -13,7 +13,7 @@ import { launchInstalledTui } from "../tui/test/helpers/launch-installed-tui.ts"
 const ROLES = [
   { role: "specifier", worktreeName: "master", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", mode: "task" },
   { role: "coder", worktreeName: "coder", session: "swarmforge-coder", displayName: "Coder", agent: "opencode", mode: "task" },
-  { role: "refactorer", worktreeName: "refactorer", session: "swarmforge-refactorer", displayName: "Refactorer", agent: "codex", mode: "task" },
+  { role: "reviewer", worktreeName: "reviewer", session: "swarmforge-reviewer", displayName: "Reviewer", agent: "codex", mode: "task" },
   { role: "architect", worktreeName: "architect", session: "swarmforge-architect", displayName: "Architect", agent: "opencode", mode: "batch" },
 ] as const;
 

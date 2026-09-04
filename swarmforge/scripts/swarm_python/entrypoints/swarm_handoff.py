@@ -111,7 +111,7 @@ def main():
         exit_with(1, f"Unknown sender role: {sender}")
 
     parsed = parse_draft(draft)
-    validation = validate(parsed["headers"], parsed["ordered"])
+    validation = validate(parsed["headers"], parsed["ordered"], sender)
     all_errors = list(parsed["errors"]) + list(validation["errors"])
 
     if all_errors:

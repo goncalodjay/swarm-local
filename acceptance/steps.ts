@@ -130,7 +130,7 @@ export function createHandlers(): Handler[] {
   handlers.push({
     pattern: /^the menu bar shows entries for dashboard, each role, logs and costs$/,
     run: (world) => {
-      for (const entry of ["[dashboard]", "[specifier]", "[coder]", "[refactorer]", "[architect]", "(logs)", "(costs)"]) {
+      for (const entry of ["[dashboard]", "[specifier]", "[coder]", "[reviewer]", "[architect]", "(logs)", "(costs)"]) {
         assert.ok(world.rendered.includes(entry), `menu bar missing ${entry}`);
       }
     },
@@ -335,7 +335,7 @@ export function createHandlers(): Handler[] {
   });
 
   handlers.push({
-    pattern: /^the menu focus is on (dashboard|specifier|coder|refactorer|architect|logs|costs)$/,
+    pattern: /^the menu focus is on (dashboard|specifier|coder|reviewer|architect|logs|costs)$/,
     run: (world, step, _example, [item]) => {
       const index = menuItemIndex(menuItems(world.app.roles), item);
       if (step.keyword.trim() === "Then") {

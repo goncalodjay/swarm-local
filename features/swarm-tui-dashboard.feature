@@ -25,7 +25,7 @@ Examples:
   | agent      | state                                 | marker  |
   | specifier  | one handoff in process                | spinner |
   | coder      | completed tasks and nothing pending   | dot     |
-  | refactorer | nothing completed and nothing pending | blank   |
+  | reviewer | nothing completed and nothing pending | blank   |
   | architect  | a pending note to the user            | !       |
 
 # swarm-tui-dashboard 3: working agent shows current task

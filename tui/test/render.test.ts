@@ -22,7 +22,7 @@ import type { AgentState, Role, TerminalSize } from "../src/types.ts";
 const roles: Role[] = [
   { role: "specifier", worktreeName: "master", worktreePath: "/p", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", receiveMode: "task" },
   { role: "coder", worktreeName: "coder", worktreePath: "/p", session: "swarmforge-coder", displayName: "Coder", agent: "opencode", receiveMode: "task" },
-  { role: "refactorer", worktreeName: "refactorer", worktreePath: "/p", session: "swarmforge-refactorer", displayName: "Refactorer", agent: "codex", receiveMode: "task" },
+  { role: "reviewer", worktreeName: "reviewer", worktreePath: "/p", session: "swarmforge-reviewer", displayName: "Reviewer", agent: "codex", receiveMode: "task" },
   { role: "architect", worktreeName: "architect", worktreePath: "/p", session: "swarmforge-architect", displayName: "Architect", agent: "opencode", receiveMode: "batch" },
 ];
 
@@ -74,7 +74,7 @@ test("statusLabel renders labels", () => {
 
 test("renderMenuBar lists dashboard, roles, logs and costs", () => {
   const bar = renderMenuBar(roles);
-  for (const entry of ["[dashboard]", "[specifier]", "[coder]", "[refactorer]", "[architect]", "(logs)", "(costs)"]) {
+  for (const entry of ["[dashboard]", "[specifier]", "[coder]", "[reviewer]", "[architect]", "(logs)", "(costs)"]) {
     assert.ok(bar.includes(entry), `menu bar missing ${entry}`);
   }
 });
