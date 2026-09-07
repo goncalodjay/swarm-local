@@ -164,6 +164,10 @@ if ! install_output="$(node "$TUI_INSTALL_SCRIPT" "$TUI_BUNDLE_SOURCE" "$TARGET"
 fi
 
 cp -R "$TEMPLATE_DIR/swarmforge" "$TARGET/swarmforge"
+# Python leaves __pycache__ behind whenever anything imports the template's
+# modules. Those are build artifacts of the source tree, never part of an
+# installation, and their .pyc files are not text.
+find "$TARGET/swarmforge" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 install -m 0755 "$TEMPLATE_DIR/swarm" "$TARGET/swarm"
 
 config_file="$TARGET/swarmforge/swarmforge.conf"
@@ -215,7 +219,11 @@ replacements = 0
 for path in root.rglob("*"):
     if not path.is_file():
         continue
-    text = path.read_text()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        # Binary or unreadable files cannot carry the placeholder.
+        continue
     count = text.count(placeholder)
     if count:
         path.write_text(text.replace(placeholder, os.environ["LANGUAGES"]))
