@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from .tmux_ops import sh, sh_out
+from .proc import sh, sh_out
 
 
 def ensure_in_file(file: Path, pattern: str):
@@ -81,7 +81,7 @@ def prepare_handoff_dirs(roles):
             )
 
 
-def sync_worktree_scripts(script_dir: Path, state_dir: Path, roles, sessions_file, roles_file, tmux_socket_file, tmux_env_file):
+def sync_worktree_scripts(script_dir: Path, state_dir: Path, roles, sessions_file, roles_file, herdr_session_file):
     for r in roles:
         if str(r.worktree_path) == str(state_dir.parent):
             continue
@@ -104,5 +104,4 @@ def sync_worktree_scripts(script_dir: Path, state_dir: Path, roles, sessions_fil
             )
         shutil.copy2(sessions_file, role_state_dir / "sessions.tsv")
         shutil.copy2(roles_file, role_state_dir / "roles.tsv")
-        shutil.copy2(tmux_socket_file, role_state_dir / "tmux-socket")
-        shutil.copy2(tmux_env_file, role_state_dir / "tmux-env")
+        shutil.copy2(herdr_session_file, role_state_dir / "herdr-session")

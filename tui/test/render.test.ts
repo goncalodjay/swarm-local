@@ -67,6 +67,7 @@ test("renderDetailPane shows task, state, timestamps and events", () => {
     role: "coder",
     displayName: "Coder",
     session: "swarmforge-coder",
+    workspaceId: "w2",
     status: "working",
     marker: "spinner",
     task: "fix-login",

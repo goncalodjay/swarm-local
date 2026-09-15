@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseRoles } from "./roles.ts";
@@ -14,7 +14,7 @@ const log = child("io");
 /**
  * Hands the terminal to and from a foreground child process.
  *
- * Attaching to a tmux session means giving the terminal away completely:
+ * Attaching to a herdr workspace means giving the terminal away completely:
  * the child inherits stdio and drives the screen until it exits. Whoever
  * owns the terminal (the OpenTUI renderer in the running TUI, plain stdio
  * in tests) supplies this pair so `attach` does not need to know which.
@@ -86,13 +86,13 @@ export function projectRoot(cwd: string): string {
   }
 }
 
-export function readSocketPath(root: string): string {
-  const file = path.join(root, ".swarmforge", "tmux-socket");
+export function readHerdrSession(root: string): string {
+  const file = path.join(root, ".swarmforge", "herdr-session");
   if (!existsSync(file)) return "";
   try {
     return readFileSync(file, "utf8").trim();
   } catch (err) {
-    log.warn({ event: "socket_read_failed", file, err }, "cannot read tmux socket file");
+    log.warn({ event: "herdr_session_read_failed", file, err }, "cannot read herdr-session file");
     return "";
   }
 }
@@ -147,17 +147,21 @@ export class FileSystemTuiIO implements TuiIO {
     return readSnapshotForRole(role).snapshot;
   }
 
+  /** Returns the herdr session name (from .swarmforge/herdr-session), not a filesystem path. */
   socketPath(): string {
-    return readSocketPath(this.root);
+    return readHerdrSession(this.root);
   }
 
   socketAvailable(): boolean {
-    const socket = this.socketPath();
-    if (socket === "") return false;
+    const herdrSession = this.socketPath();
+    if (herdrSession === "") return false;
     try {
-      return existsSync(socket);
+      const result = spawnSync("herdr", ["--session", herdrSession, "workspace", "list"], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      return result.status === 0;
     } catch (err) {
-      log.warn({ event: "socket_stat_failed", socket, err }, "cannot stat tmux socket");
+      log.warn({ event: "herdr_reachability_check_failed", herdrSession, err }, "cannot reach herdr session");
       return false;
     }
   }
@@ -166,23 +170,34 @@ export class FileSystemTuiIO implements TuiIO {
     return { cols: process.stdout.columns || 0, rows: process.stdout.rows || 0 };
   }
 
-  attach(session: string, socket: string): Promise<AttachResult> {
+  attach(workspaceId: string, herdrSession: string): Promise<AttachResult> {
     return new Promise((resolve) => {
       releaseTty();
       log.info(
-        { event: "tty_released", session, socket },
-        "tty released for tmux attach",
+        { event: "tty_released", workspaceId, herdrSession },
+        "tty released for herdr attach",
       );
+
+      try {
+        spawnSync("herdr", ["--session", herdrSession, "workspace", "focus", workspaceId], {
+          stdio: ["ignore", "ignore", "ignore"],
+        });
+      } catch (err) {
+        log.warn(
+          { event: "workspace_focus_failed", workspaceId, herdrSession, err },
+          "cannot focus herdr workspace before attach",
+        );
+      }
 
       let proc: ChildProcess;
       try {
-        proc = spawn("tmux", ["-S", socket, "attach", "-t", session], {
+        proc = spawn("herdr", ["--session", herdrSession], {
           stdio: "inherit",
         });
       } catch (err) {
         log.error(
-          { event: "attach_spawn_failed", session, socket, err },
-          "cannot spawn tmux attach",
+          { event: "attach_spawn_failed", workspaceId, herdrSession, err },
+          "cannot spawn herdr attach",
         );
         reclaimTty();
         resolve({ code: -1, reason: errMessage(err) });
@@ -190,40 +205,40 @@ export class FileSystemTuiIO implements TuiIO {
       }
       proc.on("error", (err) => {
         log.error(
-          { event: "attach_runtime_error", session, socket, err },
-          "tmux attach runtime error",
+          { event: "attach_runtime_error", workspaceId, herdrSession, err },
+          "herdr attach runtime error",
         );
       });
       proc.on("exit", (code) => {
-        log.info({ event: "tmux_attach_exit", code }, "tmux attach exited");
-        log.info({ event: "tty_reclaim_start" }, "reclaiming tty from tmux");
+        log.info({ event: "herdr_attach_exit", code }, "herdr attach exited");
+        log.info({ event: "tty_reclaim_start" }, "reclaiming tty from herdr");
         reclaimTty();
         resolve({ code, reason: "" });
       });
     });
   }
 
-  sessionExists(session: string): Promise<boolean> {
-    const socket = this.socketPath();
-    if (socket === "") return Promise.resolve(false);
+  sessionExists(workspaceId: string): Promise<boolean> {
+    const herdrSession = this.socketPath();
+    if (herdrSession === "") return Promise.resolve(false);
     return new Promise((resolve) => {
       let proc: ChildProcess;
       try {
-        proc = spawn("tmux", ["-S", socket, "has-session", "-t", session], {
+        proc = spawn("herdr", ["--session", herdrSession, "workspace", "get", workspaceId], {
           stdio: ["ignore", "ignore", "ignore"],
         });
       } catch (err) {
         log.warn(
-          { event: "session_exists_spawn_failed", session, socket, err: errMessage(err) },
-          "cannot spawn tmux has-session",
+          { event: "session_exists_spawn_failed", workspaceId, herdrSession, err: errMessage(err) },
+          "cannot spawn herdr workspace get",
         );
         resolve(false);
         return;
       }
       proc.on("error", (err) => {
         log.warn(
-          { event: "session_exists_error", session, socket, err: errMessage(err) },
-          "tmux has-session error",
+          { event: "session_exists_error", workspaceId, herdrSession, err: errMessage(err) },
+          "herdr workspace get error",
         );
         resolve(false);
       });

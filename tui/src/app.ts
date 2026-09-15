@@ -104,7 +104,7 @@ export class App {
     this.lastSocketAvailable = available;
     if (!available) {
       this.view = "error";
-      this.errorMessage = "The swarm socket is unavailable.";
+      this.errorMessage = "The swarm's herdr session is unavailable.";
       this.io.log("socket_check", { status: "unavailable" });
       log.warn({ event: "socket_unavailable" }, "socket unavailable");
     } else {
@@ -234,23 +234,23 @@ export class App {
     }
     this.attachError = null;
     log.info(
-      { event: "attach_start", role: agent.role, session: agent.session, socket: this.io.socketPath() },
+      { event: "attach_start", role: agent.role, workspaceId: agent.workspaceId, socket: this.io.socketPath() },
       "attaching",
     );
-    this.io.log("attach_start", { role: agent.role, session: agent.session, socket: this.io.socketPath() });
+    this.io.log("attach_start", { role: agent.role, workspaceId: agent.workspaceId, socket: this.io.socketPath() });
     this.beginAttach();
     let result: AttachResult;
     try {
-      result = await this.io.attach(agent.session, this.io.socketPath());
+      result = await this.io.attach(agent.workspaceId, this.io.socketPath());
     } catch (err) {
-      log.error({ event: "attach_threw", session: agent.session, err }, "attach threw");
+      log.error({ event: "attach_threw", workspaceId: agent.workspaceId, err }, "attach threw");
       this.resumeAfterDetach({ code: -1, reason: errMessage(err) });
       return;
     }
-    const diagnosis = await diagnoseAttachEnd(result, agent.session, this.io);
+    const diagnosis = await diagnoseAttachEnd(result, agent.workspaceId, this.io);
     this.io.log("attach_end", {
       role: agent.role,
-      session: agent.session,
+      workspaceId: agent.workspaceId,
       code: result.code,
       reason: diagnosis.reason,
       socket_available: diagnosis.socketAvailable,
@@ -260,7 +260,7 @@ export class App {
       {
         event: "attach_end",
         role: agent.role,
-        session: agent.session,
+        workspaceId: agent.workspaceId,
         code: result.code,
         reason: diagnosis.reason,
         socket_available: diagnosis.socketAvailable,

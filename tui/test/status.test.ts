@@ -18,6 +18,7 @@ const role: Role = {
   worktreeName: "coder",
   worktreePath: "/home/p/.worktrees/coder",
   session: "swarmforge-coder",
+  workspaceId: "w2",
   displayName: "Coder",
   agent: "opencode",
   receiveMode: "task",

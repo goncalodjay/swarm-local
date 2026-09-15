@@ -3,10 +3,10 @@
 # Preview the SwarmForge TUI without running a real swarm.
 #
 # The dashboard needs three things to show something interesting: a
-# roles.tsv, a live tmux socket, and one session per role. Launching the
-# real swarm provides all three, but it also starts four paid agents. This
-# script fakes the tmux side with placeholder sessions so the TUI can be
-# exercised for free, and tears them down on exit.
+# roles.tsv, a running herdr session, and one workspace per role. Launching
+# the real swarm provides all three, but it also starts four paid agents.
+# This script fakes the herdr side with placeholder workspaces so the TUI
+# can be exercised for free, and tears them down on exit.
 #
 # Usage:
 #   tui/dev-preview.sh              # run from source, no compile (fastest)
@@ -21,13 +21,13 @@ REPO_DIR="$(cd "$TUI_DIR/.." && pwd)"
 PROJECT="${PROJECT:-$REPO_DIR}"
 
 MODE="source"
-FAKE_SESSIONS=1
+FAKE_WORKSPACES=1
 
 while (($#)); do
   case "$1" in
     --binary) MODE="binary"; shift ;;
     --install) MODE="install"; shift ;;
-    --real) FAKE_SESSIONS=0; shift ;;
+    --real) FAKE_WORKSPACES=0; shift ;;
     --project) PROJECT="$(cd "$2" && pwd)"; shift 2 ;;
     -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
@@ -54,28 +54,55 @@ install_binary() {
   node "$TUI_DIR/src/install.ts" "$TUI_DIR/dist/swarm-tui" "$PROJECT"
 }
 
-# --- placeholder tmux sessions ------------------------------------------
+# --- placeholder herdr workspaces ----------------------------------------
 
-SOCKET=""
+HERDR_SESSION=""
 CREATED=()
 
 start_placeholders() {
-  SOCKET="$(cat "$PROJECT/.swarmforge/tmux-socket" 2>/dev/null || true)"
-  if [[ -z "$SOCKET" ]]; then
-    echo "No tmux socket recorded; run ./swarm --test-parse in $PROJECT." >&2
+  HERDR_SESSION="$(cat "$PROJECT/.swarmforge/herdr-session" 2>/dev/null || true)"
+  if [[ -z "$HERDR_SESSION" ]]; then
+    echo "No herdr session recorded; run ./swarm --test-parse in $PROJECT." >&2
     exit 1
   fi
-  mkdir -p "$(dirname "$SOCKET")"
-  while IFS=$'\t' read -r _role _wt _path session _rest; do
-    [[ -n "$session" ]] || continue
-    if tmux -S "$SOCKET" has-session -t "$session" 2>/dev/null; then
+  if ! herdr --session "$HERDR_SESSION" workspace list >/dev/null 2>&1; then
+    herdr --session "$HERDR_SESSION" server >/dev/null 2>&1 &
+    for _ in $(seq 1 50); do
+      herdr --session "$HERDR_SESSION" workspace list >/dev/null 2>&1 && break
+      sleep 0.2
+    done
+  fi
+
+  while IFS=$'\t' read -r role wt path session display agent receive pane_id workspace_id; do
+    [[ -n "$role" ]] || continue
+    if [[ -n "$workspace_id" ]] && herdr --session "$HERDR_SESSION" workspace get "$workspace_id" >/dev/null 2>&1; then
       echo "    $session already running, leaving it alone"
       continue
     fi
-    tmux -S "$SOCKET" new-session -d -s "$session" "sleep 86400"
-    CREATED+=("$session")
+    local created
+    created="$(herdr --session "$HERDR_SESSION" workspace create --cwd "$PROJECT" --label "$session" --no-focus)"
+    workspace_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["result"]["workspace"]["workspace_id"])' "$created")"
+    pane_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["result"]["root_pane"]["pane_id"])' "$created")"
+    herdr --session "$HERDR_SESSION" pane run "$pane_id" "sleep 86400" >/dev/null 2>&1 || true
+    CREATED+=("$workspace_id")
+    python3 - "$ROLES_FILE" "$role" "$pane_id" "$workspace_id" <<'PY'
+import sys
+path, role, pane_id, workspace_id = sys.argv[1:5]
+lines = open(path, encoding="utf-8").read().splitlines()
+out = []
+for line in lines:
+    fields = line.split("\t")
+    if fields and fields[0] == role:
+        while len(fields) < 9:
+            fields.append("")
+        fields[7] = pane_id
+        fields[8] = workspace_id
+        line = "\t".join(fields)
+    out.append(line)
+open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
+PY
   done < "$ROLES_FILE"
-  echo "==> placeholder sessions: ${CREATED[*]:-none}"
+  echo "==> placeholder workspaces: ${CREATED[*]:-none}"
 }
 
 cleanup() {
@@ -83,10 +110,10 @@ cleanup() {
   # CREATED is always declared, but may be empty; guard the expansion so
   # `set -u` does not trip on an empty array.
   if ((${#CREATED[@]} > 0)); then
-    for session in "${CREATED[@]}"; do
-      tmux -S "$SOCKET" kill-session -t "$session" 2>/dev/null || true
+    for workspace_id in "${CREATED[@]}"; do
+      herdr --session "$HERDR_SESSION" workspace close "$workspace_id" 2>/dev/null || true
     done
-    echo "==> removed placeholder sessions"
+    echo "==> removed placeholder workspaces"
   fi
   exit "$status"
 }
@@ -94,7 +121,7 @@ trap cleanup EXIT INT TERM
 
 # --- run -----------------------------------------------------------------
 
-((FAKE_SESSIONS)) && start_placeholders
+((FAKE_WORKSPACES)) && start_placeholders
 
 case "$MODE" in
   source)

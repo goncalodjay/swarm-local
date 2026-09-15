@@ -14,7 +14,7 @@ swarm-local/
 ├── template/                   # fuente de verdad de todo lo que se copia a un proyecto destino
 │   ├── swarm                   # shim copiado al target
 │   ├── swarmforge/
-│   │   ├── scripts/            # backend Python: tmux, handoffs, watchdog, terminal adapters
+│   │   ├── scripts/            # backend Python: herdr, handoffs
 │   │   ├── roles/              # prompts por rol (specifier, coder, reviewer, architect)
 │   │   └── constitution*       # archivo base que cada rol lee
 │   └── toolchain/              # binarios auxiliares (gherkin-*) que swarm-init copia a .swarmforge
@@ -24,7 +24,7 @@ swarm-local/
 │   ├── build.ts                # Bun.build({compile}) → dist/swarm-tui
 │   ├── src/                    # módulos TypeScript (render, attach, io, theme, …)
 │   ├── test/                   # tests (bun test)
-│   ├── dev-preview.sh          # arranca la TUI con sesiones tmux fake
+│   ├── dev-preview.sh          # arranca la TUI con workspaces de herdr fake
 │   └── dist/swarm-tui          # binario compilado (platform-specific)
 │
 ├── docs/                       # esta carpeta
@@ -40,8 +40,8 @@ swarm-local/
 2. `install_swarm.sh` detecta plataforma y descarga el binario de la TUI desde GitHub Releases (o compila local si no existe).
 3. Delega a `./swarm-init /ruta/al/proyecto`, que pregunta lenguajes, auto-approve y (por cada rol) agente → proveedor → modelo → nivel de razonamiento.
 4. `swarm-init` copia `template/swarmforge/`, `template/toolchain/`, `template/swarm`, y el binario de la TUI al target. Edita `swarmforge/swarmforge.conf` con las elecciones y sustituye `{{LANGUAGES}}` en la constitución.
-5. En el proyecto destino, `./swarm` valida que `engram` esté instalado (`require("engram")`, igual que `tmux`/`git`), levanta 4 sesiones tmux (una por rol) con `ENGRAM_PROJECT` exportado al mismo valor en las cuatro, y lanza el agente CLI correspondiente con sus flags.
-6. `./swarm tui` adjunta la TUI a las sesiones para inspeccionar/adjuntar manualmente.
+5. En el proyecto destino, `./swarm` valida que `herdr` y `engram` estén instalados (`require("herdr")`, `require("engram")`, igual que `git`), levanta 4 workspaces de herdr (uno por rol, dentro de una sesión de herdr con nombre `swarmforge-<hash del path>`) con `ENGRAM_PROJECT` exportado al mismo valor en las cuatro, y lanza el agente CLI correspondiente con sus flags.
+6. `./swarm tui` adjunta la TUI a esos workspaces para inspeccionar/adjuntar manualmente.
 
 ## Memoria compartida
 
@@ -53,7 +53,7 @@ Los cuatro roles leen y escriben memoria de proyecto compartida con la CLI de [E
 | --- | --- | --- |
 | Installer | `install_swarm.sh` | descarga TUI, valida SHA, llama a `swarm-init` |
 | Interview + copy | `swarm-init` | menús numerados (bash), copia `template/`, escribe `swarmforge.conf`, sustituye placeholders |
-| Runtime backend | `template/swarmforge/scripts/swarm_python/` | tmux sessions, handoffs, watchdog, terminal adapters |
+| Runtime backend | `template/swarmforge/scripts/swarm_python/` | herdr workspaces/panes, handoffs |
 | Dashboard | `tui/` | OpenTUI sobre Bun, empaquetado como binario standalone |
 
 ## Documentación obsoleta

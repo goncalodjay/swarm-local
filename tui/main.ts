@@ -90,16 +90,16 @@ async function runTui(rootSpan: { update: (attrs: Record<string, unknown>) => vo
     }
   };
 
-  // Attaching to tmux gives the terminal to a child process, so the
+  // Attaching to herdr gives the terminal to a child process, so the
   // renderer must let go of it first and take it back afterwards.
   setTerminalControl({
     release: () => {
       try {
         // suspend() fully returns the terminal to its normal state (leaves
         // the alternate screen, disables raw/mouse modes, pauses stdin) so
-        // a spawned tmux client owns the whole screen. stop() only pauses
+        // the spawned herdr client owns the whole screen. stop() only pauses
         // the render loop, leaving OpenTUI's alternate buffer active, which
-        // makes tmux render into half a screen and exit with status 1.
+        // makes herdr render into half a screen and exit with status 1.
         renderer.suspend();
       } catch (err) {
         log.warn({ event: "renderer_suspend_failed", err }, "cannot suspend renderer for attach");

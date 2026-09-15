@@ -10,6 +10,7 @@ function makeRole(role: string, index: number): Role {
     worktreeName: role,
     worktreePath: `/p/.worktrees/${role}`,
     session: `swarmforge-${role}`,
+    workspaceId: `w${index + 1}`,
     displayName: role[0].toUpperCase() + role.slice(1),
     agent: "opencode",
     receiveMode: "task",
@@ -163,7 +164,7 @@ test("enter attaches to the selected agent session on the socket", async () => {
   assert.equal(app.view, "attached");
   io.detach();
   await attaching;
-  assert.deepEqual(io.attaches, [{ session: "swarmforge-coder", socket: "/tmp/swarmforge/test.sock" }]);
+  assert.deepEqual(io.attaches, [{ session: "w2", socket: "/tmp/swarmforge/test.sock" }]);
   assert.equal(app.view, "dashboard");
 });
 
@@ -217,7 +218,7 @@ test("attach logs attach_start and attach_end events", async () => {
   const attachStart = io.logCalls.find((c) => c.event === "attach_start");
   const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
   assert.ok(attachStart, "missing attach_start");
-  assert.equal(attachStart.fields.session, "swarmforge-coder");
+  assert.equal(attachStart.fields.workspaceId, "w2");
   assert.equal(attachStart.fields.socket, "/tmp/swarmforge/test.sock");
   assert.ok(attachEnd, "missing attach_end");
   assert.equal(attachEnd.fields.reason, "server disconnected unexpectedly");
@@ -252,7 +253,7 @@ test("generic non-zero exit with missing session logs the session root cause", a
   await attaching;
   const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
   assert.ok(attachEnd, "missing attach_end");
-  assert.equal(attachEnd.fields.reason, "tmux session swarmforge-coder no longer exists");
+  assert.equal(attachEnd.fields.reason, "herdr workspace w2 no longer exists");
   assert.equal(attachEnd.fields.socket_available, true);
   assert.equal(attachEnd.fields.session_alive, false);
 });
@@ -270,7 +271,7 @@ test("generic non-zero exit with unavailable socket logs the socket root cause",
   await attaching;
   const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
   assert.ok(attachEnd, "missing attach_end");
-  assert.equal(attachEnd.fields.reason, "tmux socket /tmp/swarmforge/test.sock is unavailable");
+  assert.equal(attachEnd.fields.reason, "herdr session /tmp/swarmforge/test.sock is unavailable");
   assert.equal(attachEnd.fields.socket_available, false);
   assert.equal(attachEnd.fields.session_alive, false);
 });
@@ -287,7 +288,7 @@ test("generic non-zero exit with alive session logs the client exit status", asy
   await attaching;
   const attachEnd = io.logCalls.find((c) => c.event === "attach_end");
   assert.ok(attachEnd, "missing attach_end");
-  assert.equal(attachEnd.fields.reason, "tmux client exited with status 1");
+  assert.equal(attachEnd.fields.reason, "herdr client exited with status 1");
   assert.equal(attachEnd.fields.socket_available, true);
   assert.equal(attachEnd.fields.session_alive, true);
 });

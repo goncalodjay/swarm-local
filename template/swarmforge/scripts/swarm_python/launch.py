@@ -61,8 +61,8 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
         f"cd {shell_quote(str(role_worktree))} && "
     )
 
-    # Resolve the agent binary at launch time so the tmux session does not
-    # depend on the shell's PATH inside tmux inheriting the caller's env.
+    # Resolve the agent binary at launch time so the herdr pane does not
+    # depend on the shell's PATH inheriting the caller's env.
     agent_bin = shell_quote(shutil.which(agent) or agent)
 
     if agent == "claude":
@@ -118,19 +118,18 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
     if index == 0:
         cleanup_parts = [
             "; exit_code=$?;",
-            f"SWARMFORGE_TERMINAL_BACKEND={shell_quote(ctx.terminal_backend)}",
             "nohup",
             shell_quote(str(ctx.script_dir / "swarm-cleanup.sh")),
-            shell_quote(ctx.tmux_socket),
-            shell_quote(str(ctx.window_ids_file)),
+            shell_quote(ctx.herdr_session),
+            shell_quote(str(ctx.working_dir)),
         ]
-        cleanup_parts.extend(shell_quote(r.session) for r in ctx.roles)
+        cleanup_parts.extend(shell_quote(r.workspace_id) for r in ctx.roles)
         cleanup_parts.extend([">/dev/null", "2>&1", "&!", ";", "exit", "$exit_code"])
         command += " " + " ".join(cleanup_parts)
 
     return command
 
 
-def send_launch_command(socket, target: str, command: str):
-    from .tmux_ops import tmux_send_keys
-    tmux_send_keys(socket, target, command, "Enter")
+def send_launch_command(session: str, pane_id: str, command: str):
+    from .herdr_ops import pane_run
+    pane_run(session, pane_id, command)

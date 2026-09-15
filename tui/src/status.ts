@@ -39,6 +39,7 @@ export function agentState(
     role: role.role,
     displayName: role.displayName,
     session: role.session,
+    workspaceId: role.workspaceId,
     status,
     marker: statusToMarker(status),
     task: currentTask(snapshot),

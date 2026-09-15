@@ -2,14 +2,12 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: swarm-cleanup.sh <tmux-socket> <window-ids-file> [session ...]" >&2
+  echo "Usage: swarm-cleanup.sh <herdr-session> <working-dir> [workspace-id ...]" >&2
   exit 1
 fi
 
-TMUX_SOCKET="$1"
-WINDOW_IDS_FILE="$2"
-TERMINAL_BACKEND="${SWARMFORGE_TERMINAL_BACKEND:-terminal-app}"
-WORKING_DIR="$(cd "$(dirname "$WINDOW_IDS_FILE")/.." && pwd)"
+HERDR_SESSION="$1"
+WORKING_DIR="$2"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 shift
 shift
@@ -17,9 +15,6 @@ shift
 has_command() {
   command -v "$1" &>/dev/null
 }
-
-source "$SCRIPT_DIR/swarm-terminal-adapter.sh"
-load_terminal_backend "$TERMINAL_BACKEND"
 
 if has_command python3; then
   python3 "$SCRIPT_DIR/swarm_python/entrypoints/stop_handoff_daemon.py" "$WORKING_DIR" 2>/dev/null || true
@@ -34,15 +29,6 @@ else
   fi
 fi
 
-for session in "$@"; do
-  tmux -S "$TMUX_SOCKET" kill-session -t "$session" 2>/dev/null || true
+for workspace_id in "$@"; do
+  herdr --session "$HERDR_SESSION" workspace close "$workspace_id" 2>/dev/null || true
 done
-
-sleep 1
-
-if [[ -f "$WINDOW_IDS_FILE" ]]; then
-  while IFS= read -r window_id; do
-    [[ -n "$window_id" ]] || continue
-    terminal_close_window "$window_id"
-  done < "$WINDOW_IDS_FILE"
-fi

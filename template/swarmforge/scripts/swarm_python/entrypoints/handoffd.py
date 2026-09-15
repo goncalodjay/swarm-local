@@ -6,11 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import os
 import signal
-import subprocess
 import threading
 import time
 
 from swarm_python.handoff.timefmt import now_iso
+from swarm_python.herdr_ops import pane_run
 
 POLL_MS = 1000
 WAKE_MESSAGE = "You have new handoff mail. If idle, run ready_for_next.sh."
@@ -44,6 +44,7 @@ def load_roles(roles_file):
             "display": fields[4] if len(fields) > 4 else "",
             "agent": fields[5] if len(fields) > 5 else "",
             "receive-mode": receive_mode,
+            "pane-id": fields[7] if len(fields) > 7 else "",
         }
     return out
 
@@ -80,27 +81,10 @@ def target_path(role_info, filename):
     )
 
 
-def notify(socket, session):
-    r1 = subprocess.run(
-        ["tmux", "-S", socket, "send-keys", "-t", session, "-l", WAKE_MESSAGE],
-        capture_output=True,
-    )
-    time.sleep(0.15)
-    r2 = subprocess.run(
-        ["tmux", "-S", socket, "send-keys", "-t", session, "C-m"],
-        capture_output=True,
-    )
-    time.sleep(0.05)
-    r3 = subprocess.run(
-        ["tmux", "-S", socket, "send-keys", "-t", session, "C-j"],
-        capture_output=True,
-    )
-    if r1.returncode != 0:
-        raise RuntimeError("tmux send text failed")
-    if r2.returncode != 0:
-        raise RuntimeError("tmux send carriage return failed")
-    if r3.returncode != 0:
-        raise RuntimeError("tmux send line feed failed")
+def notify(herdr_session, pane_id):
+    if not pane_id:
+        raise RuntimeError("recipient has no pane-id recorded in roles.tsv")
+    pane_run(herdr_session, pane_id, WAKE_MESSAGE)
 
 
 def move_with_collision(source, target_dir):
@@ -120,7 +104,7 @@ def fail_(path, reason, log_file, daemon_dir):
     move_with_collision(path, failed_dir)
 
 
-def deliver(roles, socket, sender_role, path, log_file, daemon_dir):
+def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir):
     filename = path.name
     message = parse_message(path)
     headers = message["headers"]
@@ -143,7 +127,7 @@ def deliver(roles, socket, sender_role, path, log_file, daemon_dir):
                 render_message(delivered_headers, message["body"]),
                 encoding="utf-8",
             )
-        notify(socket, role_info["session"])
+        notify(herdr_session, role_info["pane-id"])
     sender_info = roles.get(sender_role)
     if sender_info:
         sent_dir = (
@@ -184,9 +168,9 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file):
     if should_stop(stop_file):
         return
     roles_file = state_dir / "roles.tsv"
-    socket_file = state_dir / "tmux-socket"
+    session_file = state_dir / "herdr-session"
     roles = load_roles(roles_file)
-    socket = socket_file.read_text(encoding="utf-8").strip()
+    herdr_session = session_file.read_text(encoding="utf-8").strip()
     for role, role_info in roles.items():
         if should_stop(stop_file):
             break
@@ -194,7 +178,7 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file):
             if should_stop(stop_file):
                 break
             try:
-                deliver(roles, socket, role, path, log_file, daemon_dir)
+                deliver(roles, herdr_session, role, path, log_file, daemon_dir)
             except Exception as e:
                 log(log_file, daemon_dir, "error", str(path), str(e))
                 try:

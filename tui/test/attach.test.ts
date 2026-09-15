@@ -31,8 +31,8 @@ test("diagnosis preserves clean and explicit attach reasons", async () => {
     socketAvailable: null,
     sessionAlive: null,
   });
-  assert.deepEqual(await diagnoseAttachEnd(result(1, "tmux: permission denied"), session, io()), {
-    reason: "tmux: permission denied",
+  assert.deepEqual(await diagnoseAttachEnd(result(1, "herdr: permission denied"), session, io()), {
+    reason: "herdr: permission denied",
     socketAvailable: null,
     sessionAlive: null,
   });
@@ -42,7 +42,7 @@ test("diagnosis reports an unavailable socket", async () => {
   assert.deepEqual(
     await diagnoseAttachEnd(result(1), session, io({ socketAvailable: false })),
     {
-      reason: "tmux socket /tmp/swarmforge/test.sock is unavailable",
+      reason: "herdr session /tmp/swarmforge/test.sock is unavailable",
       socketAvailable: false,
       sessionAlive: false,
     },
@@ -52,9 +52,9 @@ test("diagnosis reports an unavailable socket", async () => {
 test("diagnosis reports whether the session remains alive", async () => {
   assert.match(
     (await diagnoseAttachEnd(result(1), session, io({ sessionAlive: false }))).reason,
-    /session swarmforge-coder no longer exists/,
+    /workspace swarmforge-coder no longer exists/,
   );
-  assert.equal((await diagnoseAttachEnd(result(1), session, io())).reason, "tmux client exited with status 1");
+  assert.equal((await diagnoseAttachEnd(result(1), session, io())).reason, "herdr client exited with status 1");
 });
 
 test("diagnosis preserves unknown failures from the session check", async () => {

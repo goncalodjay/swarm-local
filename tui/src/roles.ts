@@ -9,7 +9,7 @@ export function parseRoles(text: string): Role[] {
     const line = rawLine.trim();
     if (line === "" || line.startsWith("#")) continue;
     const fields = line.split("\t");
-    const [role, worktreeName, worktreePath, session, displayName, agent, receiveMode] = fields;
+    const [role, worktreeName, worktreePath, session, displayName, agent, receiveMode, , workspaceId] = fields;
     if (!role || !worktreePath || !session) {
       log.warn(
         { event: "roles_line_skipped", line: lineIndex + 1, line: line },
@@ -22,6 +22,7 @@ export function parseRoles(text: string): Role[] {
       worktreeName: worktreeName ?? "",
       worktreePath,
       session,
+      workspaceId: workspaceId ?? "",
       displayName: displayName !== undefined && displayName !== "" ? displayName : role,
       agent: agent ?? "",
       receiveMode: receiveMode ?? "task",

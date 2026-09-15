@@ -3,6 +3,7 @@ export interface Role {
   worktreeName: string;
   worktreePath: string;
   session: string;
+  workspaceId: string;
   displayName: string;
   agent: string;
   receiveMode: string;
@@ -30,6 +31,7 @@ export interface AgentState {
   role: string;
   displayName: string;
   session: string;
+  workspaceId: string;
   status: Status;
   marker: Marker;
   task: string | null;

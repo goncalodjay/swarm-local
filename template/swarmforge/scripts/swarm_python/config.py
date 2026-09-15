@@ -23,6 +23,8 @@ class RoleRow:
     worktree_path: Path
     receive_mode: str
     extra_args: str
+    workspace_id: str = ""
+    pane_id: str = ""
 
 
 def fail(message):

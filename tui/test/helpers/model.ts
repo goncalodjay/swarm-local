@@ -2,10 +2,10 @@ import type { FrameModel } from "../../src/render.ts";
 import type { AgentState, Role } from "../../src/types.ts";
 
 export const roles: Role[] = [
-  { role: "specifier", worktreeName: "master", worktreePath: "/p", session: "swarmforge-specifier", displayName: "Specifier", agent: "opencode", receiveMode: "task" },
-  { role: "coder", worktreeName: "coder", worktreePath: "/p", session: "swarmforge-coder", displayName: "Coder", agent: "opencode", receiveMode: "task" },
-  { role: "reviewer", worktreeName: "reviewer", worktreePath: "/p", session: "swarmforge-reviewer", displayName: "Reviewer", agent: "codex", receiveMode: "task" },
-  { role: "architect", worktreeName: "architect", worktreePath: "/p", session: "swarmforge-architect", displayName: "Architect", agent: "opencode", receiveMode: "batch" },
+  { role: "specifier", worktreeName: "master", worktreePath: "/p", session: "swarmforge-specifier", workspaceId: "w1", displayName: "Specifier", agent: "opencode", receiveMode: "task" },
+  { role: "coder", worktreeName: "coder", worktreePath: "/p", session: "swarmforge-coder", workspaceId: "w2", displayName: "Coder", agent: "opencode", receiveMode: "task" },
+  { role: "reviewer", worktreeName: "reviewer", worktreePath: "/p", session: "swarmforge-reviewer", workspaceId: "w3", displayName: "Reviewer", agent: "codex", receiveMode: "task" },
+  { role: "architect", worktreeName: "architect", worktreePath: "/p", session: "swarmforge-architect", workspaceId: "w4", displayName: "Architect", agent: "opencode", receiveMode: "batch" },
 ];
 
 export function agent(role: Role, marker: AgentState["marker"], task: string | null): AgentState {
@@ -13,6 +13,7 @@ export function agent(role: Role, marker: AgentState["marker"], task: string | n
     role: role.role,
     displayName: role.displayName,
     session: role.session,
+    workspaceId: role.workspaceId,
     status:
       marker === "spinner" ? "working"
       : marker === "bang" ? "needs-human"

@@ -37,7 +37,7 @@ export async function diagnoseAttachEnd(
 
   if (!socketAvailable) {
     const diagnosis: AttachDiagnosis = {
-      reason: `tmux socket ${io.socketPath()} is unavailable`,
+      reason: `herdr session ${io.socketPath()} is unavailable`,
       socketAvailable: false,
       sessionAlive: false,
     };
@@ -56,7 +56,7 @@ export async function diagnoseAttachEnd(
 
   if (!sessionAlive) {
     const diagnosis: AttachDiagnosis = {
-      reason: `tmux session ${session} no longer exists`,
+      reason: `herdr workspace ${session} no longer exists`,
       socketAvailable: true,
       sessionAlive: false,
     };
@@ -65,7 +65,7 @@ export async function diagnoseAttachEnd(
   }
 
   const diagnosis: AttachDiagnosis = {
-    reason: `tmux client exited with status ${result.code ?? "unknown"}`,
+    reason: `herdr client exited with status ${result.code ?? "unknown"}`,
     socketAvailable: true,
     sessionAlive: true,
   };

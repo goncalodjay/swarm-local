@@ -4,8 +4,8 @@ import { isDisabledMenuItem, menuItemIndex, menuItems, moveMenuFocus } from "../
 import type { Role } from "../src/types.ts";
 
 const roles: Role[] = [
-  { role: "specifier", worktreeName: "master", worktreePath: "/p", session: "s", displayName: "Specifier", agent: "opencode", receiveMode: "task" },
-  { role: "coder", worktreeName: "coder", worktreePath: "/p", session: "s", displayName: "Coder", agent: "opencode", receiveMode: "task" },
+  { role: "specifier", worktreeName: "master", worktreePath: "/p", session: "s", workspaceId: "w1", displayName: "Specifier", agent: "opencode", receiveMode: "task" },
+  { role: "coder", worktreeName: "coder", worktreePath: "/p", session: "s", workspaceId: "w2", displayName: "Coder", agent: "opencode", receiveMode: "task" },
 ];
 
 test("menuItems lists dashboard, roles, logs and costs", () => {
