@@ -1,4 +1,5 @@
 import re
+import shutil
 from pathlib import Path
 
 from .config import AGENT_WINDOW, RoleRow
@@ -54,34 +55,39 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
 
     base = (
         f"export SWARMFORGE_ROLE={shell_quote(role)} && "
+        f"export ENGRAM_PROJECT={shell_quote(ctx.working_dir.name)} && "
         f"export PATH={shell_quote(str(role_script_dir))}:"
         f"{shell_quote(str(role_tool_bin))}:$PATH && "
         f"cd {shell_quote(str(role_worktree))} && "
     )
 
+    # Resolve the agent binary at launch time so the tmux session does not
+    # depend on the shell's PATH inside tmux inheriting the caller's env.
+    agent_bin = shell_quote(shutil.which(agent) or agent)
+
     if agent == "claude":
         agent_cmd = (
-            f"claude --append-system-prompt-file {shell_quote(str(prompt_file))} "
+            f"{agent_bin} --append-system-prompt-file {shell_quote(str(prompt_file))} "
             f"--permission-mode acceptEdits -n {shell_quote(f'SwarmForge {display}')} "
             f"{_extra_args_prefix(row)}"
             f'"$(cat {shell_quote(str(prompt_file))})"'
         )
     elif agent == "codex":
         agent_cmd = (
-            f"codex exec -C {shell_quote(str(role_worktree))} "
+            f"{agent_bin} exec -C {shell_quote(str(role_worktree))} "
             f"{_extra_args_prefix(row)}"
             f'"$(cat {shell_quote(str(prompt_file))})"'
         )
     elif agent == "copilot":
         agent_cmd = (
-            f"copilot -C {shell_quote(str(role_worktree))} "
+            f"{agent_bin} -C {shell_quote(str(role_worktree))} "
             f"--name {shell_quote(f'SwarmForge {display}')} "
             f"{_extra_args_prefix(row)}"
             f'-i "$(cat {shell_quote(str(prompt_file))})"'
         )
     elif agent == "grok":
         agent_cmd = (
-            f"grok --cwd {shell_quote(str(role_worktree))} "
+            f"{agent_bin} --cwd {shell_quote(str(role_worktree))} "
             f"{_grok_permission_prefix(row)}"
             f"{_extra_args_prefix(row)}"
             f'--rules "$(cat {shell_quote(str(prompt_file))})" '
@@ -89,12 +95,18 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
         )
     elif agent == "opencode":
         agent_cmd = (
-            f"opencode {_extra_args_prefix(row)}"
+            f"{agent_bin} {_extra_args_prefix(row)}"
             f'--prompt "$(cat {shell_quote(str(prompt_file))})"'
+        )
+    elif agent == "hermes":
+        agent_cmd = (
+            f"{agent_bin} chat --in {shell_quote(str(role_worktree))} "
+            f"{_extra_args_prefix(row)}"
+            f"--query-file {shell_quote(str(prompt_file))}"
         )
     elif agent == "pi":
         agent_cmd = (
-            f"pi --name {shell_quote(f'SwarmForge {display}')} "
+            f"{agent_bin} --name {shell_quote(f'SwarmForge {display}')} "
             f"--no-context-files {_extra_args_prefix(row)}"
             f'"$(cat {shell_quote(str(prompt_file))})"'
         )

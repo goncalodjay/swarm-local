@@ -262,6 +262,7 @@ def open_terminal_surfaces(ctx):
 def run_main(root: str):
     require("tmux")
     require("git")
+    require("engram")
 
     ctx = build_context(Path(root).resolve(), Path(__file__).resolve().parent.parent.parent)
 
