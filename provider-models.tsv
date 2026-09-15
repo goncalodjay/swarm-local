@@ -1,0 +1,32 @@
+agent	provider	provider_label	model_id	model_label
+claude	anthropic	Anthropic	claude-sonnet-4	Claude Sonnet 4
+claude	anthropic	Anthropic	claude-opus-4	Claude Opus 4
+codex	openai	OpenAI	gpt-5.6-luna	GPT-5.6 Luna
+codex	openai	OpenAI	gpt-5.4-mini	GPT-5.4 Mini
+codex	openai	OpenAI	o4-mini	O4 Mini
+copilot	github	GitHub Copilot	gpt-4o	GPT-4o
+copilot	github	GitHub Copilot	o3-mini	O3 Mini
+grok	xai	xAI	grok-3	Grok 3
+grok	xai	xAI	grok-3-mini	Grok 3 Mini
+pi	openai-codex	OpenAI Codex	gpt-5.4-mini	GPT-5.4 Mini
+pi	openai-codex	OpenAI Codex	gpt-5.6-luna	GPT-5.6 Luna
+opencode	opencode-go	OpenCode Go	qwen3.7-plus	Qwen 3.7 Plus
+opencode	opencode-go	OpenCode Go	minimax-m3	MiniMax M3
+opencode	opencode-go	OpenCode Go	gpt-5.6-luna	GPT-5.6 Luna
+opencode	opencode-go	OpenCode Go	deepseek-v4-pro	DeepSeek V4 Pro
+opencode	opencode-go	OpenCode Go	kimi-k3	Kimi K3
+opencode	opencode	OpenCode (free)	deepseek-v4-flash-free	DeepSeek V4 Flash (Free)
+opencode	opencode	OpenCode (free)	minimax-m3-free	MiniMax M3 (Free)
+hermes	opencode-go	OpenCode Go	qwen3.7-plus	Qwen 3.7 Plus
+hermes	opencode-go	OpenCode Go	minimax-m3	MiniMax M3
+hermes	opencode-go	OpenCode Go	gpt-5.6-luna	GPT-5.6 Luna
+hermes	opencode-go	OpenCode Go	deepseek-v4-pro	DeepSeek V4 Pro
+hermes	openrouter	OpenRouter	openai/gpt-5.6-luna	OpenRouter — GPT-5.6 Luna
+hermes	openrouter	OpenRouter	anthropic/claude-sonnet-4	OpenRouter — Claude Sonnet 4
+hermes	anthropic	Anthropic	claude-sonnet-4	Claude Sonnet 4
+hermes	openai	OpenAI	gpt-5.6-luna	GPT-5.6 Luna
+hermes	google	Google	gemini-2.5-pro	Gemini 2.5 Pro
+hermes	deepseek	DeepSeek	deepseek-chat	DeepSeek Chat
+hermes	xai	xAI	grok-3	Grok 3
+hermes	local	Local / Ollama	llama-3.1-8b	Local — Llama 3.1 8B
+hermes	local	Local / Ollama	qwen2.5-7b	Local — Qwen2.5 7B

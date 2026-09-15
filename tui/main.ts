@@ -95,17 +95,22 @@ async function runTui(rootSpan: { update: (attrs: Record<string, unknown>) => vo
   setTerminalControl({
     release: () => {
       try {
-        renderer.stop();
+        // suspend() fully returns the terminal to its normal state (leaves
+        // the alternate screen, disables raw/mouse modes, pauses stdin) so
+        // a spawned tmux client owns the whole screen. stop() only pauses
+        // the render loop, leaving OpenTUI's alternate buffer active, which
+        // makes tmux render into half a screen and exit with status 1.
+        renderer.suspend();
       } catch (err) {
-        log.warn({ event: "renderer_stop_failed", err }, "cannot stop renderer for attach");
+        log.warn({ event: "renderer_suspend_failed", err }, "cannot suspend renderer for attach");
       }
     },
     reclaim: () => {
       try {
-        renderer.start();
+        renderer.resume();
         render();
       } catch (err) {
-        log.warn({ event: "renderer_start_failed", err }, "cannot restart renderer after attach");
+        log.warn({ event: "renderer_resume_failed", err }, "cannot resume renderer after attach");
       }
     },
   });

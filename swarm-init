@@ -18,64 +18,120 @@ while [[ -L "$SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/template"
-OPENCODE_MODELS_FILE="$SCRIPT_DIR/opencode-models.tsv"
+PROVIDER_MODELS_FILE="$SCRIPT_DIR/provider-models.tsv"
 LANGUAGES=""
 TARGET=""
 ROLES=(specifier coder reviewer architect)
 WORKTREES=(master coder reviewer architect)
-declare -A ROLE_AGENTS ROLE_MODELS ROLE_THINKING
-SUPPORTED_AGENTS=(claude codex copilot grok opencode pi)
+declare -A ROLE_AGENTS ROLE_PROVIDERS ROLE_MODEL_IDS ROLE_MODEL_LABELS ROLE_THINKING
+SUPPORTED_AGENTS=(claude codex copilot grok hermes opencode pi)
 # Flags de auto-aprobación por backend. Pi no pide permisos por herramienta; no necesita flag.
 declare -A AUTO_APPROVE_FLAGS=(
   [claude]="--dangerously-skip-permissions"
   [codex]="--dangerously-bypass-approvals-and-sandbox"
   [copilot]="--allow-all"
   [grok]="--permission-mode bypassPermissions"
+  [hermes]="--yolo"
   [opencode]="--auto"
 )
 
 while (($#)); do
   case "$1" in
-    --languages|-l)
-      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 2; }
-      LANGUAGES="$2"
-      shift 2
-      ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    -*)
-      echo "Unknown option: $1" >&2
-      usage >&2
+  --languages | -l)
+    [[ $# -ge 2 ]] || {
+      echo "Missing value for $1" >&2
       exit 2
-      ;;
-    *)
-      [[ -z "$TARGET" ]] || { echo "Only one project directory is allowed." >&2; exit 2; }
-      TARGET="$1"
-      shift
-      ;;
+    }
+    LANGUAGES="$2"
+    shift 2
+    ;;
+  --help | -h)
+    usage
+    exit 0
+    ;;
+  -*)
+    echo "Unknown option: $1" >&2
+    usage >&2
+    exit 2
+    ;;
+  *)
+    [[ -z "$TARGET" ]] || {
+      echo "Only one project directory is allowed." >&2
+      exit 2
+    }
+    TARGET="$1"
+    shift
+    ;;
   esac
 done
 
 TARGET="${TARGET:-$PWD}"
 TARGET="$(cd "$TARGET" && pwd)"
 
+# Colores/limpieza de pantalla para la experiencia de menú.
+if command -v tput >/dev/null 2>&1 && [[ -t 2 ]]; then
+  BOLD="$(tput bold 2>/dev/null || true)"
+  DIM="$(tput dim 2>/dev/null || true)"
+  REVERSE="$(tput rev 2>/dev/null || true)"
+  RESET="$(tput sgr0 2>/dev/null || true)"
+else
+  BOLD=""
+  DIM=""
+  REVERSE=""
+  RESET=""
+fi
+
+# Todas las impresiones de la interfaz de menú van a stderr para no
+# contaminar la salida que se redirige a archivos de configuración.
+mprintf() {
+  printf "$@" >&2
+}
+
+clear_screen() {
+  if [[ -t 2 ]] && command -v tput >/dev/null 2>&1; then
+    tput clear 2>/dev/null || printf '\033[2J\033[H'
+  else
+    printf '\n'
+  fi
+}
+
+header() {
+  clear_screen >&2
+  mprintf '%s%sSwarmForge local — configuración del backend%s\n' "$BOLD" "$REVERSE" "$RESET"
+  mprintf '%s%s%s\n\n' "$DIM" "$1" "$RESET"
+}
+
 if [[ -z "$LANGUAGES" ]]; then
+  header ""
   read -r -p "¿Qué lenguajes se utilizarán en este proyecto? (ej.: Go, Python): " LANGUAGES
 fi
 LANGUAGES="$(printf '%s' "$LANGUAGES" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-[[ -n "$LANGUAGES" ]] || { echo "Debes indicar al menos un lenguaje." >&2; exit 2; }
+[[ -n "$LANGUAGES" ]] || {
+  echo "Debes indicar al menos un lenguaje." >&2
+  exit 2
+}
 
 choose_agent() {
-  local role="$1" agent
+  local role="$1" selection
+  local -a agents=("${SUPPORTED_AGENTS[@]}")
   while :; do
-    read -r -p "Agente para ${role} (${SUPPORTED_AGENTS[*]}): " agent
-    agent="${agent,,}"
-    for supported in "${SUPPORTED_AGENTS[@]}"; do
-      [[ "$agent" == "$supported" ]] && { printf '%s' "$agent"; return; }
+    header "Rol: ${role}"
+    mprintf '%sSelecciona el agente de código:%s\n' "$BOLD" "$RESET"
+    local i=1
+    for agent in "${agents[@]}"; do
+      mprintf '  %d) %s\n' "$i" "$agent"
+      ((i++))
     done
-    echo "Agente no válido. Opciones: ${SUPPORTED_AGENTS[*]}." >&2
+    read -r -p "Agente [1-${#agents[@]}]: " selection
+    if [[ "$selection" =~ ^[0-9]+$ ]]; then
+      local idx=$((selection - 1))
+      if ((idx >= 0 && idx < ${#agents[@]})); then
+        printf '%s' "${agents[$idx]}"
+        return
+      fi
+    fi
+    mprintf 'Selección no válida.\n'
+    sleep 0.5
   done
 }
 
@@ -88,55 +144,181 @@ choose_model_identifier() {
       printf '%s' "$value"
       return
     fi
-    echo "Indica un identificador de modelo no vacío y sin espacios." >&2
+    mprintf 'Indica un identificador de modelo no vacío y sin espacios.\n'
   done
 }
 
-choose_opencode_model() {
-  local role="$1" selection index=1 id label
-  local -a ids=()
-  local -a labels=()
-  [[ -r "$OPENCODE_MODELS_FILE" ]] || { echo "No se encontró el catálogo local de modelos OpenCode." >&2; exit 1; }
-  while IFS=$'\t' read -r id label; do
-    [[ -n "$id" && -n "$label" ]] || continue
-    ids+=("$id")
-    labels+=("$label")
-  done < "$OPENCODE_MODELS_FILE"
-  ((${#ids[@]} > 0)) || { echo "El catálogo local de modelos OpenCode está vacío." >&2; exit 1; }
+# Devuelve por stdout las líneas del catálogo para un agente, con columnas:
+# provider<TAB>provider_label<TAB>model_id<TAB>model_label
+_catalog_for_agent() {
+  local agent="$1"
+  [[ -r "$PROVIDER_MODELS_FILE" ]] || return 0
+  awk -F'\t' -v agent="$agent" '
+    NR > 1 && $1 == agent && $2 != "" && $4 != "" {
+      print $2 "\t" $3 "\t" $4 "\t" $5
+    }
+  ' "$PROVIDER_MODELS_FILE"
+}
 
-  echo "Modelos OpenCode disponibles para ${role}:" >&2
-  for index in "${!ids[@]}"; do
-    printf '  %d) %s\n' "$((index + 1))" "${labels[$index]}" >&2
-  done
+_choose_from_catalog() {
+  local agent="$1" role="$2"
+  local -a providers=() provider_labels=() model_ids=() model_labels=() model_provider=()
+  local last_provider=""
+
+  while IFS=$'\t' read -r pkey plabel mid mlabel; do
+    [[ -n "$pkey" && -n "$mid" ]] || continue
+    if [[ "$pkey" != "$last_provider" ]]; then
+      providers+=("$pkey")
+      provider_labels+=("${plabel:-$pkey}")
+      last_provider="$pkey"
+    fi
+    model_ids+=("$mid")
+    model_labels+=("${mlabel:-$mid}")
+    model_provider+=("$pkey")
+  done < <(_catalog_for_agent "$agent")
+
+  if ((${#providers[@]} == 0)); then
+    mprintf 'No hay catálogo local para %s; se pedirá el modelo manualmente.\n' "$agent"
+    ROLE_PROVIDERS[$role]="default"
+    ROLE_MODEL_IDS[$role]="$(choose_model_identifier "Modelo para ${role}")"
+    ROLE_MODEL_LABELS[$role]="${ROLE_MODEL_IDS[$role]}"
+    return
+  fi
+
+  # Menú de proveedor.
+  local provider_selection provider
   while :; do
-    read -r -p "Selecciona el modelo OpenCode para ${role} [1-${#ids[@]}]: " selection
-    if [[ "$selection" =~ ^[0-9]+$ ]] && ((selection >= 1 && selection <= ${#ids[@]})); then
-      printf '%s' "${ids[$((selection - 1))]}"
+    header "Rol: ${role} — agente: ${agent}"
+    mprintf '%sSelecciona el proveedor:%s\n' "$BOLD" "$RESET"
+    local i=1
+    for label in "${provider_labels[@]}"; do
+      mprintf '  %d) %s\n' "$i" "$label"
+      ((i++))
+    done
+    read -r -p "Proveedor [1-${#providers[@]}]: " provider_selection
+    if [[ "$provider_selection" =~ ^[0-9]+$ ]]; then
+      local pidx=$((provider_selection - 1))
+      if ((pidx >= 0 && pidx < ${#providers[@]})); then
+        provider="${providers[$pidx]}"
+        break
+      fi
+    fi
+    mprintf 'Selección no válida.\n'
+    sleep 0.5
+  done
+
+  # Recolectar modelos del proveedor elegido.
+  local -a pmodels=() plabels=()
+  local idx=0
+  for mid in "${model_ids[@]}"; do
+    if [[ "${model_provider[$idx]}" == "$provider" ]]; then
+      pmodels+=("$mid")
+      plabels+=("${model_labels[$idx]}")
+    fi
+    ((idx += 1))
+  done
+
+  # Modelos + opción "Otro".
+  local model_selection model_id
+  while :; do
+    header "Rol: ${role} — proveedor: ${provider}"
+    mprintf '%sSelecciona el modelo:%s\n' "$BOLD" "$RESET"
+    i=1
+    for label in "${plabels[@]}"; do
+      mprintf '  %d) %s\n' "$i" "$label"
+      ((i++))
+    done
+    mprintf '  %d) %s\n' "$i" "Otro (ingresar identificador manualmente)"
+    read -r -p "Modelo [1-$i]: " model_selection
+    if [[ "$model_selection" =~ ^[0-9]+$ ]]; then
+      local midx=$((model_selection - 1))
+      if ((midx >= 0 && midx < ${#pmodels[@]})); then
+        model_id="${pmodels[$midx]}"
+        ROLE_MODEL_LABELS[$role]="${plabels[$midx]}"
+        break
+      elif ((midx == ${#pmodels[@]})); then
+        model_id="$(choose_model_identifier "Identificador del modelo para ${role}")"
+        ROLE_MODEL_LABELS[$role]="$model_id"
+        break
+      fi
+    fi
+    mprintf 'Selección no válida.\n'
+    sleep 0.5
+  done
+
+  ROLE_PROVIDERS[$role]="$provider"
+  ROLE_MODEL_IDS[$role]="$model_id"
+}
+
+choose_provider_and_model() {
+  local agent="$1" role="$2"
+  case "$agent" in
+  opencode | hermes | claude | codex | copilot | grok | pi)
+    if [[ -s "$PROVIDER_MODELS_FILE" ]] && _catalog_for_agent "$agent" | grep -q .; then
+      _choose_from_catalog "$agent" "$role"
+    else
+      ROLE_PROVIDERS[$role]="default"
+      ROLE_MODEL_IDS[$role]="$(choose_model_identifier "Modelo para ${role}")"
+      ROLE_MODEL_LABELS[$role]="${ROLE_MODEL_IDS[$role]}"
+    fi
+    ;;
+  *)
+    ROLE_PROVIDERS[$role]="default"
+    ROLE_MODEL_IDS[$role]="$(choose_model_identifier "Modelo para ${role}")"
+    ROLE_MODEL_LABELS[$role]="${ROLE_MODEL_IDS[$role]}"
+    ;;
+  esac
+}
+
+choose_thinking() {
+  local role="$1"
+  local -a levels=(off minimal low medium high xhigh max)
+  local selection
+  while :; do
+    header "Rol: ${role}"
+    mprintf '%sSelecciona el nivel de reasoning/thinking (effort):%s\n' "$BOLD" "$RESET"
+    local i=1
+    for level in "${levels[@]}"; do
+      local marker=""
+      [[ "$level" == "medium" ]] && marker=" ${DIM}(predeterminado)${RESET}"
+      mprintf '  %d) %s%s\n' "$i" "$level" "$marker"
+      ((i++))
+    done
+    read -r -p "Nivel [1-${#levels[@]}] (Enter para medium): " selection
+    selection="${selection:-4}"
+    if [[ "$selection" =~ ^[0-9]+$ ]]; then
+      local idx=$((selection - 1))
+      if ((idx >= 0 && idx < ${#levels[@]})); then
+        printf '%s' "${levels[$idx]}"
+        return
+      fi
+    fi
+    mprintf 'Selección no válida.\n'
+    sleep 0.5
+  done
+}
+
+choose_auto_approve() {
+  while :; do
+    read -r -p "¿Auto-aprobar los permisos de herramientas de los agentes? (s/n) [s]: " AUTO_APPROVE
+    AUTO_APPROVE="${AUTO_APPROVE:-s}"
+    AUTO_APPROVE="${AUTO_APPROVE,,}"
+    if [[ "$AUTO_APPROVE" =~ ^(s|si|sí|n|no|y|yes)$ ]]; then
+      printf '%s' "$AUTO_APPROVE"
       return
     fi
-    echo "Selecciona un número entre 1 y ${#ids[@]}." >&2
+    mprintf 'Respuesta no válida. Ingresa s (sí) o n (no).\n'
   done
 }
 
-choose_model() {
-  local agent="$1" role="$2"
-  if [[ "$agent" == "opencode" ]]; then
-    choose_opencode_model "$role"
-  else
-    choose_model_identifier "Modelo para ${role}"
-  fi
-}
+AUTO_APPROVE="$(choose_auto_approve)"
 
-read -r -p "¿Auto-aprobar los permisos de herramientas de los agentes? (s/n) [s]: " AUTO_APPROVE
-AUTO_APPROVE="${AUTO_APPROVE:-s}"
-AUTO_APPROVE="${AUTO_APPROVE,,}"
-
-printf '\nConfigura el backend de cada sesión. Modelo y nivel se guardan en swarmforge/swarmforge.conf.\n'
+mprintf '\nConfigura el backend de cada sesión. Modelo y nivel se guardan en swarmforge/swarmforge.conf.\n'
 for index in "${!ROLES[@]}"; do
   role="${ROLES[$index]}"
   ROLE_AGENTS[$role]="$(choose_agent "$role")"
-  ROLE_MODELS[$role]="$(choose_model "${ROLE_AGENTS[$role]}" "$role")"
-  ROLE_THINKING[$role]="$(choose_model_identifier "Thinking/effort para ${role} (off|minimal|low|medium|high|xhigh|max)")"
+  choose_provider_and_model "${ROLE_AGENTS[$role]}" "$role"
+  ROLE_THINKING[$role]="$(choose_thinking "$role")"
 done
 
 for path in swarm swarmforge; do
@@ -147,19 +329,38 @@ for path in swarm swarmforge; do
   fi
 done
 
-TUI_INSTALL_SCRIPT="$SCRIPT_DIR/tui/src/install.ts"
+# install_tui_bundle <source-bundle> <project-root> [install-rel]
+# Pure-bash replacement for tui/src/install.ts: copy a compiled TUI binary
+# into <project-root>/<install-rel> and chmod it. Keeps swarm-init Node-free
+# on the destination; the install.ts entry stays for test compatibility.
+install_tui_bundle() {
+  local source_bundle="$1"
+  local project_root="$2"
+  local install_rel="${3:-.swarmforge/tui/swarm-tui}"
+  [[ -f "$source_bundle" ]] || {
+    echo "install_tui_bundle: bundle not found at $source_bundle" >&2
+    return 1
+  }
+  local target="$project_root/$install_rel"
+  if [[ -e "$target" ]]; then
+    echo "install_tui_bundle: refusing to overwrite existing $target" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$target")" || return 1
+  cp "$source_bundle" "$target" || return 1
+  chmod 0755 "$target" || return 1
+  echo "Installed TUI bundle at $target"
+}
+
 TUI_BUNDLE_SOURCE="$SCRIPT_DIR/tui/dist/swarm-tui"
-if ! command -v node >/dev/null 2>&1; then
-  echo "No se instaló: se requiere 'node' para instalar el bundle de TUI." >&2
+TUI_INSTALL_REL=".swarmforge/tui/swarm-tui"
+if [[ ! -f "$TUI_BUNDLE_SOURCE" ]]; then
+  echo "No se instaló: no se encontró el binario del TUI en $TUI_BUNDLE_SOURCE." >&2
+  echo "Compílalo una vez con: (cd tui && npm install && npm run build)" >&2
   exit 1
 fi
-if [[ ! -f "$TUI_INSTALL_SCRIPT" ]]; then
-  echo "No se instaló: no se encontró $TUI_INSTALL_SCRIPT." >&2
-  exit 1
-fi
-if ! install_output="$(node "$TUI_INSTALL_SCRIPT" "$TUI_BUNDLE_SOURCE" "$TARGET" 2>&1)"; then
-  echo "$install_output" >&2
-  echo "No se instaló: falló la instalación del bundle de TUI." >&2
+if ! install_tui_bundle "$TUI_BUNDLE_SOURCE" "$TARGET" "$TUI_INSTALL_REL"; then
+  echo "No se instaló: falló la copia del binario del TUI." >&2
   exit 1
 fi
 
@@ -170,40 +371,58 @@ cp -R "$TEMPLATE_DIR/swarmforge" "$TARGET/swarmforge"
 find "$TARGET/swarmforge" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 install -m 0755 "$TEMPLATE_DIR/swarm" "$TARGET/swarm"
 
+declare -a CONFIG_LINES=()
+for index in "${!ROLES[@]}"; do
+  role="${ROLES[$index]}"
+  worktree="${WORKTREES[$index]}"
+  agent="${ROLE_AGENTS[$role]}"
+  provider="${ROLE_PROVIDERS[$role]}"
+  model_id="${ROLE_MODEL_IDS[$role]}"
+  thinking="${ROLE_THINKING[$role]}"
+  extra=""
+  case "$agent" in
+  hermes)
+    extra="--provider $provider --model $model_id"
+    [[ "$thinking" != "off" ]] && extra="$extra --reasoning $thinking"
+    ;;
+  opencode)
+    extra="--model $provider/$model_id"
+    ;;
+  pi)
+    extra="--model $provider/$model_id --thinking $thinking"
+    ;;
+  claude)
+    extra="--model $model_id"
+    [[ "$thinking" != "off" ]] && extra="$extra --effort $thinking"
+    ;;
+  codex)
+    extra="--model $model_id"
+    [[ "$thinking" != "off" ]] && extra="$extra -c model_reasoning_effort=$thinking"
+    ;;
+  copilot | grok)
+    extra="--model $model_id"
+    ;;
+  esac
+  if [[ "$AUTO_APPROVE" =~ ^(s|si|sí|y|yes)$ ]]; then
+    auto_flag="${AUTO_APPROVE_FLAGS[$agent]:-}"
+    [[ -n "$auto_flag" ]] && extra="$extra $auto_flag"
+  fi
+  if [[ "$role" == "architect" ]]; then
+    CONFIG_LINES+=("window $role $agent $worktree batch $extra")
+  else
+    CONFIG_LINES+=("window $role $agent $worktree $extra")
+  fi
+done
+
 config_file="$TARGET/swarmforge/swarmforge.conf"
 {
   cat <<'EOF'
 # Generated by swarm-init. Format: window <role> <agent> <worktree> [task|batch] [extra-cli-args...]
-# Supported agents: claude, codex, copilot, grok, opencode, pi.
+# Supported agents: claude, codex, copilot, grok, hermes, opencode, pi.
 # Extra arguments are interpreted by the selected agent CLI.
 EOF
-  for index in "${!ROLES[@]}"; do
-    role="${ROLES[$index]}"
-    worktree="${WORKTREES[$index]}"
-    agent="${ROLE_AGENTS[$role]}"
-    model="${ROLE_MODELS[$role]}"
-    thinking="${ROLE_THINKING[$role]}"
-    extra="--model $model"
-    case "$agent" in
-      pi)
-        [[ "$model" == */* ]] || model="openai-codex/$model"
-        extra="--model $model --thinking $thinking"
-        ;;
-      claude) extra="$extra --effort $thinking" ;;
-      codex) extra="$extra -c model_reasoning_effort=$thinking" ;;
-      opencode|copilot|grok) ;;
-    esac
-    if [[ "$AUTO_APPROVE" =~ ^(s|si|sí|y|yes)$ ]]; then
-      auto_flag="${AUTO_APPROVE_FLAGS[$agent]:-}"
-      [[ -n "$auto_flag" ]] && extra="$extra $auto_flag"
-    fi
-    if [[ "$role" == "architect" ]]; then
-      printf 'window %s %s %s batch %s\n' "$role" "$agent" "$worktree" "$extra"
-    else
-      printf 'window %s %s %s %s\n' "$role" "$agent" "$worktree" "$extra"
-    fi
-  done
-} > "$config_file"
+  printf '%s\n' "${CONFIG_LINES[@]}"
+} >"$config_file"
 
 mkdir -p "$TARGET/.swarmforge"
 cp -R "$TEMPLATE_DIR/toolchain" "$TARGET/.swarmforge/toolchain"
@@ -235,14 +454,34 @@ PY
 ignore_file="$TARGET/.gitignore"
 touch "$ignore_file"
 for entry in .swarmforge/ .worktrees/; do
-  grep -Fqx "$entry" "$ignore_file" || printf '%s\n' "$entry" >> "$ignore_file"
+  grep -Fqx "$entry" "$ignore_file" || printf '%s\n' "$entry" >>"$ignore_file"
 done
 
-printf '\nSwarmForge local instalado en %s\n' "$TARGET"
-printf 'Lenguajes configurados: %s\n' "$LANGUAGES"
+clear_screen >&2
+mprintf '%sInstalación completada%s\n' "$BOLD" "$RESET"
+mprintf 'SwarmForge local instalado en %s\n' "$TARGET"
+mprintf 'Lenguajes configurados: %s\n' "$LANGUAGES"
+mprintf '\nBackends por rol:\n'
+for index in "${!ROLES[@]}"; do
+  role="${ROLES[$index]}"
+  agent="${ROLE_AGENTS[$role]}"
+  provider="${ROLE_PROVIDERS[$role]}"
+  model_id="${ROLE_MODEL_IDS[$role]}"
+  label="${ROLE_MODEL_LABELS[$role]}"
+  thinking="${ROLE_THINKING[$role]}"
+  mprintf '  %-10s %-8s' "$role" "$agent"
+  if [[ "$agent" == "opencode" || "$agent" == "pi" ]]; then
+    mprintf ' — %s/%s' "$provider" "$model_id"
+  elif [[ "$agent" == "hermes" ]]; then
+    mprintf ' — %s / %s' "$provider" "$model_id"
+  else
+    mprintf ' — %s' "$model_id"
+  fi
+  mprintf ' (%s, thinking: %s)\n' "$label" "$thinking"
+done
 if [[ "$AUTO_APPROVE" =~ ^(s|si|sí|y|yes)$ ]]; then
-  printf 'Permisos de herramientas: auto-aprobados (editable en swarmforge/swarmforge.conf)\n'
+  mprintf '\nPermisos de herramientas: auto-aprobados (editable en swarmforge/swarmforge.conf)\n'
 else
-  printf 'Permisos de herramientas: con confirmación interactiva\n'
+  mprintf '\nPermisos de herramientas: con confirmación interactiva\n'
 fi
-printf 'Inicia con: cd %q && ./swarm\n' "$TARGET"
+mprintf 'Inicia con: cd %q && ./swarm\n' "$TARGET"

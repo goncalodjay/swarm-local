@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  bash-syntax:
+    name: bash -n
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check bash scripts
+        run: |
+          set -e
+          while IFS= read -r script; do
+            bash -n "$script"
+          done < <(find . -name '*.sh' -not -path './node_modules/*' -not -path './tui/node_modules/*' -print0 | xargs -0)
+
+  python-compile:
+    name: py_compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile-check Python sources
+        run: |
+          python3 -m compileall -q template/swarmforge/scripts || true
+
+  tui-build:
+    name: tui build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4'
+      - name: Build TUI on linux-x64
+        working-directory: tui
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Upload linux-x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: swarm-tui-linux-x64
+          path: tui/dist/swarm-tui

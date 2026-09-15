@@ -2,6 +2,34 @@
 
 Plantilla local y autónoma para iniciar SwarmForge en otros proyectos con agentes Pi u OpenCode. No descarga `swarm-forge` ni consulta GitHub al ejecutar `swarm-init` o `./swarm`.
 
+## Requisitos
+
+Instalá estas herramientas en el dispositivo destino **antes** de clonar el repo.
+
+| Herramienta | Versión mínima | Para qué se usa | Notas |
+| --- | --- | --- | --- |
+| `bash` | 5.0 | `swarm-init`, `install_swarm.sh`, `./swarm`, todos los `.sh` | viene con macOS / WSL / la mayoría de Linux |
+| `python3` | 3.10 | backend de SwarmForge (`swarmforge/scripts/swarm_python/*.py`) | en WSL/Ubuntu: `sudo apt install python3`; en macOS: `brew install python@3.12` |
+| `tmux` | 3.2 | sesiones por agente y la TUI | `sudo apt install tmux` / `brew install tmux` |
+| `git` | 2.30 | worktrees del swarm, `swarm_handoff.sh` | preinstalado en todas las distros |
+| `engram` | última estable | memoria compartida entre los cuatro roles (ver [Memoria compartida](#memoria-compartida-engram)) | `brew install gentleman-programming/tap/engram` o ver [instalación de Engram](https://github.com/Gentleman-Programming/engram/blob/main/docs/INSTALLATION.md); `./swarm` no arranca sin él |
+| `curl` | 7.x | descarga del binario de la TUI desde GitHub Releases | `sudo apt install curl` |
+| `tar` | cualquier | extracción del bundle si la release viene como `.tar.gz` | preinstalado |
+| `opencode`, `codex`, `claude`, `copilot`, `grok`, `hermes`, `pi` | las que publique cada vendor | CLIs de los agentes que elijas para cada rol | instalá solo las que vas a usar; el wizard de `swarm-init` las valida |
+| `bun` | 1.4 | solo para compilar la TUI desde fuente | obligatorio **en la máquina donde compilás**, **no** en la destino |
+| `node` + `npm` | node 20.x o 22.x, npm 10.x | compilar la TUI desde fuente (cuando no hay binario pre-construido) | mismo caso: solo en la máquina de build |
+
+Resumen rápido:
+
+- **En cada máquina destino** (donde corrés `./swarm`): `bash`, `python3 >= 3.10`, `tmux`, `git`, `engram`, `curl`, `tar`, y los CLIs de los agentes que vayas a usar.
+- **En la máquina de build** (donde compilas la TUI una vez): además de lo anterior, `node >= 20` y `bun >= 1.4`. Si solo vas a usar binarios pre-construidos de las GitHub Releases, no necesitás esta máquina.
+
+Verificación rápida en una sola línea:
+
+```sh
+for t in bash python3 tmux git engram curl tar; do command -v "$t" >/dev/null && echo "OK $t" || echo "MISSING $t"; done
+```
+
 ## Instalación local
 
 ```sh
@@ -11,12 +39,34 @@ ln -sf ~/projects/swarm-local/swarm-init ~/.local/bin/swarm-init
 
 Asegúrate de que `~/.local/bin` esté en `PATH`.
 
+## Instalar SwarmForge en otra máquina
+
+Cloná el repo y corré el instalador:
+
+```sh
+git clone <url-del-repo> ~/swarm-local
+cd ~/swarm-local
+./install_swarm.sh /ruta/al/proyecto
+```
+
+`install_swarm.sh` hace:
+
+1. Detecta SO y arquitectura (linux-x64, darwin-arm64, …).
+2. Descarga el binario de la TUI correspondiente desde GitHub Releases (`swarm-tui-<os>-<arch>.bin` + `.sha256`) y lo verifica.
+3. Si no hay binario publicado para esa plataforma, compila la TUI localmente (necesita `node` y `bun`).
+4. Ejecuta `./swarm-init <target>` que copia la plantilla y deja el proyecto listo.
+
+Variables opcionales:
+
+- `SWARM_RELEASE_REPO=owner/swarm-local` (default: `nousresearch/swarm-local`).
+- `SWARM_RELEASE_TAG=v1.2.3` o `latest` (default: `latest`).
+
 ## Uso
 
 Desde la raíz de un proyecto:
 
 ```sh
-swarm-init
+./install_swarm.sh .          # o: ./swarm-init
 # responde los lenguajes, la auto-aprobación de permisos y, para cada rol, backend, modelo y thinking/effort
 ./swarm
 ```
@@ -33,7 +83,7 @@ El inicializador copia `swarm` y `swarmforge/`, sustituye `{{LANGUAGES}}` en la 
 
 `./swarm` requiere `python3` (3.10+), `tmux`, `git` y el ejecutable configurado para cada rol (`pi`, `opencode`, `claude`, `codex`, `copilot` o `grok`). La plantilla incluye localmente `gherkin-parser`, `gherkin-ir-dry-checker` y `gherkin-mutator`; `swarm-init` los instala bajo `.swarmforge/toolchain/bin` y los añade al `PATH` de cada agente. Las herramientas de mutación, CRAP y DRY específicas de cada lenguaje siguen siendo una decisión del proyecto: los agentes no las descargarán y pedirán indicaciones si una tarea las requiere.
 
-`swarm-init` además necesita `node` para su instalador y un `tui/dist/swarm-tui` ya compilado (ver la sección TUI). El binario del TUI no requiere ningún runtime en la máquina destino.
+`swarm-init` ya no necesita `node` en el destino: copia la TUI con `install -m 0755`. Para compilarla por primera vez o para una plataforma nueva, hace falta `node` + `bun` en la máquina de build (ver tabla de requisitos). El binario del TUI no requiere ningún runtime en la máquina destino.
 
 ## TUI
 
@@ -71,6 +121,7 @@ Los argumentos posteriores al worktree (`--model`, `--agent`, `--auto`, etc.) se
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `copilot` | `--allow-all` |
 | `grok` | `--permission-mode bypassPermissions` |
+| `hermes` | `--yolo` |
 | `opencode` | `--auto` |
 | `pi` | (sin flag: no pide permisos por herramienta) |
 
@@ -98,11 +149,21 @@ specifier: merge + PR + marcar completa + siguiente feature aprobada
 
 El ruteo no es solo una convención de prompts: `swarm_handoff.sh` rechaza los handoffs que salen del ciclo.
 
+## Memoria compartida (engram)
+
+Los cuatro roles comparten memoria de proyecto mediante [Engram](https://github.com/Gentleman-Programming/engram), un binario Go agnóstico de agente con CLI, MCP y SQLite+FTS5 local. `engram` es requisito obligatorio: `swarm_cli.py` corre `require("engram")` junto con `tmux` y `git`, así que `./swarm` no arranca si falta.
+
+- `./swarm` exporta `ENGRAM_PROJECT` para cada sesión tmux, con el mismo valor (el nombre del directorio raíz del proyecto) para los cuatro roles y sus cuatro worktrees distintos. Esto evita que la detección automática de Engram por directorio de trabajo (`cwd`) invente un proyecto de memoria diferente por worktree.
+- Los agentes usan la CLI de `engram` (`engram context`, `engram search`, `engram save`, ...) en vez de depender de que cada backend tenga configurado el servidor MCP: `grok` y `hermes` no tienen soporte oficial de Engram, así que la CLI es el único camino que funciona igual para los siete backends soportados.
+- El protocolo completo (cuándo orientarse, cuándo guardar, cómo usar `topic_key`) vive en `template/swarmforge/scripts/shared-articles/memory.prompt` y lo obedecen los cuatro roles vía la constitución.
+- Bootstrap de un proyecto nuevo: si `engram search ... --project "$ENGRAM_PROJECT"` no devuelve nada, el specifier es quien crea la primera memoria (`engram save "Project overview" ... --type architecture --topic architecture/overview --project "$ENGRAM_PROJECT"`) una vez aprobada la primera spec. Ese primer `save` es lo que da de alta el proyecto en Engram; el resto de los roles lo encuentran después solo por compartir el mismo `ENGRAM_PROJECT`, sin que el handoff tenga que transportar el contenido de la memoria.
+- `--project "$ENGRAM_PROJECT"` es obligatorio en cada llamada a `engram`: lo comprobé contra una instalación real y sin el flag explícito, `save`/`search`/`context` no aíslan por proyecto (un `save` sin `--project` queda huérfano, sin proyecto asignado). El env var por sí solo no alcanza.
+
 ## Configuración por rol
 
 `swarm-init` pregunta para `specifier`, `coder`, `reviewer` y `architect`, en este orden: backend (`claude`, `codex`, `copilot`, `grok`, `opencode` o `pi`), modelo y nivel de thinking/effort. Los cuatro roles pueden usar backends distintos.
 
-Al elegir OpenCode, aparece un menú de modelos legible (por ejemplo, `OpenCode Go — Kimi K3`); el inicializador guarda internamente su identificador canónico sin espacios (`opencode-go/kimi-k3`). El catálogo local está en `opencode-models.tsv`; se actualiza deliberadamente en `swarm-local`, no mediante una descarga durante la inicialización.
+Al elegir OpenCode, aparece un menú de modelos legible (por ejemplo, `OpenCode Go — Kimi K3`); el inicializador guarda internamente su identificador canónico sin espacios (`opencode-go/kimi-k3`). El catálogo local está en `provider-models.tsv` (columnas `agent`, `provider`, `provider_label`, `model_id`, `model_label`; cubre los siete agentes soportados, no solo OpenCode); se actualiza deliberadamente en `swarm-local`, no mediante una descarga durante la inicialización.
 
 Para los roles `pi`, el inicializador guarda el modelo como `openai-codex/modelo`, por ejemplo `--model openai-codex/gpt-5.6-terra`; así Pi resuelve explícitamente el proveedor Codex y no hereda Azure como predeterminado. Pi usa `--thinking`, Claude usa `--effort` y Codex usa `-c model_reasoning_effort=...`. OpenCode, Copilot y Grok reciben el modelo; sus opciones de razonamiento dependen de su configuración/proveedor y puedes añadir sus flags específicos manualmente a `swarmforge.conf`.
 
