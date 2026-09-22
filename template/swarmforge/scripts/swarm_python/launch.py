@@ -30,14 +30,36 @@ def _grok_permission_prefix(row: RoleRow) -> str:
     return "--permission-mode acceptEdits "
 
 
-def _write_agent_instruction(role: str, prompt_file: Path):
-    prompt_file.write_text(
-        f"Read swarmforge/constitution.prompt, then read every file it refers to "
-        f"recursively, and obey all of those instructions.\n"
-        f"Read swarmforge/roles/{role}.prompt, then read every file it refers to "
-        f"recursively, and follow all of those instructions.\n",
-        encoding="utf-8",
+def _write_agent_instruction(role: str, role_worktree: Path, prompt_file: Path):
+    # Inline the constitution, its articles, and the role prompt instead of
+    # telling the agent to go read them: every role otherwise burns its first
+    # turn on the same fixed set of file reads before it can do anything.
+    swarmforge_dir = role_worktree / "swarmforge"
+    sections = []
+
+    constitution_file = swarmforge_dir / "constitution.prompt"
+    if constitution_file.exists():
+        sections.append(constitution_file.read_text(encoding="utf-8"))
+
+    articles_dir = swarmforge_dir / "constitution" / "articles"
+    if articles_dir.is_dir():
+        for path in sorted(articles_dir.glob("*.prompt")):
+            sections.append(path.read_text(encoding="utf-8"))
+
+    shared_dir = swarmforge_dir / "scripts" / "shared-articles"
+    if shared_dir.is_dir():
+        for path in sorted(shared_dir.glob("*.prompt")):
+            sections.append(path.read_text(encoding="utf-8"))
+
+    role_file = swarmforge_dir / "roles" / f"{role}.prompt"
+    if role_file.exists():
+        sections.append(role_file.read_text(encoding="utf-8"))
+
+    sections.append(
+        "The constitution, its articles, and your role above were loaded for "
+        "you at startup; you do not need to re-read those files now."
     )
+    prompt_file.write_text("\n\n---\n\n".join(sections) + "\n", encoding="utf-8")
 
 
 def build_launch_command(ctx, index: int, row: RoleRow) -> str:
@@ -52,7 +74,7 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
         role_script_dir = role_worktree / "swarmforge" / "scripts"
     prompt_file = ctx.prompts_dir / f"{role}.md"
 
-    _write_agent_instruction(role, prompt_file)
+    _write_agent_instruction(role, role_worktree, prompt_file)
 
     base = (
         f"export SWARMFORGE_ROLE={shell_quote(role)} && "
