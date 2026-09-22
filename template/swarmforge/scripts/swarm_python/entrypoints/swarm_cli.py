@@ -121,14 +121,14 @@ def stop_handoff_daemon(ctx):
 
 def start_handoff_daemon(ctx):
     (ctx.daemon_dir / "stop").unlink(missing_ok=True)
-    command = list(sleep_inhibit_prefix())
-    command += [str(HANDOFFD), str(ctx.working_dir)]
+    inhibit_prefix = sleep_inhibit_prefix()
+    command = list(inhibit_prefix) + [sys.executable, str(HANDOFFD), str(ctx.working_dir)]
     log = open(ctx.handoff_daemon_log, "ab")
     try:
         subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
     finally:
         log.close()
-    extra = " with OS sleep prevention" if len(command) > 2 else ""
+    extra = " with OS sleep prevention" if inhibit_prefix else ""
     print(f"{GREEN}Started handoff daemon{extra}.{RESET}")
 
 
