@@ -27,7 +27,7 @@ from swarm_python.herdr_ops import (
     workspace_create,
     workspace_list,
 )
-from swarm_python.launch import build_launch_command, send_launch_command
+from swarm_python.launch import build_launch_command, send_launch_command, write_launch_script
 from swarm_python.paths import build_context
 from swarm_python.sleep_inhibit import prefix as sleep_inhibit_prefix
 from swarm_python.tsv import write_tsv
@@ -134,7 +134,8 @@ def start_handoff_daemon(ctx):
 
 def launch_role(ctx, index, row: RoleRow):
     command = build_launch_command(ctx, index, row)
-    send_launch_command(ctx.herdr_session, row.pane_id, command)
+    script_path = write_launch_script(ctx, row.role, command)
+    send_launch_command(ctx.herdr_session, row.pane_id, script_path)
     print(
         f"  {CYAN}[{row.display_name}]{RESET} started in workspace {row.workspace_id} "
         f"({row.pane_id})"
