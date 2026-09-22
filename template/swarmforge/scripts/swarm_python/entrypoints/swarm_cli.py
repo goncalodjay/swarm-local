@@ -223,9 +223,14 @@ def run_main(root: str):
 
 
 def run_tui(root: str):
-    tui_bundle = Path(root) / ".swarmforge" / "tui" / "swarm-tui"
+    tui_dir = Path(root) / ".swarmforge" / "tui"
+    tui_bundle = tui_dir / "swarm-tui"
     if not tui_bundle.exists():
-        fail(f"TUI bundle not found at {tui_bundle}")
+        windows_bundle = tui_dir / "swarm-tui.exe"
+        if windows_bundle.exists():
+            tui_bundle = windows_bundle
+        else:
+            fail(f"TUI bundle not found at {tui_bundle}")
     print(f"{GREEN}Starting SwarmForge TUI in {RESET}{root}")
     os.chdir(str(root))
     # The TUI is a self-contained binary; it needs no interpreter on PATH.
