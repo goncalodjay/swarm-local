@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 from pathlib import Path
@@ -130,6 +131,24 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
     return command
 
 
-def send_launch_command(session: str, pane_id: str, command: str):
+def write_launch_script(ctx, role: str, command: str) -> Path:
+    # herdr panes on Windows default to PowerShell, which can't parse the
+    # POSIX syntax above. Writing it to a file and invoking that file with
+    # an explicit `bash` keeps the pane's own shell (PowerShell, cmd, bash,
+    # whatever) out of the picture entirely.
+    script_path = ctx.prompts_dir / f"{role}.sh"
+    script_path.write_text(f"#!/usr/bin/env bash\n{command}\n", encoding="utf-8")
+    return script_path
+
+
+def send_launch_command(session: str, pane_id: str, script_path: Path):
     from .herdr_ops import pane_run
-    pane_run(session, pane_id, command)
+    bash_bin = shutil.which("bash") or "bash"
+    invocation = f'"{bash_bin}" "{script_path}"'
+    if os.name == "nt":
+        # PowerShell (the pane's default shell on Windows) treats a leading
+        # quoted string as an expression, not a command, without the call
+        # operator. POSIX shells choke on a leading `&`, so this must match
+        # the OS the pane actually runs on, not the string's own syntax.
+        invocation = f"& {invocation}"
+    pane_run(session, pane_id, invocation)

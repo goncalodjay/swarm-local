@@ -27,7 +27,7 @@ from swarm_python.herdr_ops import (
     workspace_create,
     workspace_list,
 )
-from swarm_python.launch import build_launch_command, send_launch_command
+from swarm_python.launch import build_launch_command, send_launch_command, write_launch_script
 from swarm_python.paths import build_context
 from swarm_python.sleep_inhibit import prefix as sleep_inhibit_prefix
 from swarm_python.tsv import write_tsv
@@ -121,20 +121,21 @@ def stop_handoff_daemon(ctx):
 
 def start_handoff_daemon(ctx):
     (ctx.daemon_dir / "stop").unlink(missing_ok=True)
-    command = list(sleep_inhibit_prefix())
-    command += [str(HANDOFFD), str(ctx.working_dir)]
+    inhibit_prefix = sleep_inhibit_prefix()
+    command = list(inhibit_prefix) + [sys.executable, str(HANDOFFD), str(ctx.working_dir)]
     log = open(ctx.handoff_daemon_log, "ab")
     try:
         subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
     finally:
         log.close()
-    extra = " with OS sleep prevention" if len(command) > 2 else ""
+    extra = " with OS sleep prevention" if inhibit_prefix else ""
     print(f"{GREEN}Started handoff daemon{extra}.{RESET}")
 
 
 def launch_role(ctx, index, row: RoleRow):
     command = build_launch_command(ctx, index, row)
-    send_launch_command(ctx.herdr_session, row.pane_id, command)
+    script_path = write_launch_script(ctx, row.role, command)
+    send_launch_command(ctx.herdr_session, row.pane_id, script_path)
     print(
         f"  {CYAN}[{row.display_name}]{RESET} started in workspace {row.workspace_id} "
         f"({row.pane_id})"
@@ -223,9 +224,14 @@ def run_main(root: str):
 
 
 def run_tui(root: str):
-    tui_bundle = Path(root) / ".swarmforge" / "tui" / "swarm-tui"
+    tui_dir = Path(root) / ".swarmforge" / "tui"
+    tui_bundle = tui_dir / "swarm-tui"
     if not tui_bundle.exists():
-        fail(f"TUI bundle not found at {tui_bundle}")
+        windows_bundle = tui_dir / "swarm-tui.exe"
+        if windows_bundle.exists():
+            tui_bundle = windows_bundle
+        else:
+            fail(f"TUI bundle not found at {tui_bundle}")
     print(f"{GREEN}Starting SwarmForge TUI in {RESET}{root}")
     os.chdir(str(root))
     # The TUI is a self-contained binary; it needs no interpreter on PATH.

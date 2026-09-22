@@ -1,6 +1,19 @@
-import fcntl
+import os
 
 from .project import state_dir
+
+
+def _lock_exclusive(fd):
+    if os.name == "nt":
+        import msvcrt
+        # msvcrt.locking needs at least one byte in the file to lock.
+        fd.write("x")
+        fd.flush()
+        fd.seek(0)
+        msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX)
 
 
 def next_sequence() -> str:
@@ -10,7 +23,7 @@ def next_sequence() -> str:
     lock_file = handoff_dir / "sequence.lock"
     lock_fd = open(lock_file, "w")
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        _lock_exclusive(lock_fd)
         last = 0
         if seq_file.exists():
             try:
