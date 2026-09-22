@@ -28,6 +28,9 @@ type: note
 to: <role>[,<role>...]
 priority: NN
 message: <one line, max 80 chars>
+
+Optionally, after a blank line, add free-form text: defects, context,
+review notes. It is appended to the generated payload verbatim.
 """
 
 
@@ -49,15 +52,19 @@ def sender_role():
     return role
 
 
-def body_text(type_, sender, canonical_commit, note_message):
+def body_text(type_, sender, canonical_commit, note_message, extra_body):
     if type_ == "git_handoff":
-        return f"Re-read your role and constitution.\n\nmerge_and_process {sender} {canonical_commit}"
-    if type_ == "note":
-        return f"Re-read your role and constitution.\n\n{note_message}"
-    return ""
+        text = f"Re-read your role and constitution.\n\nmerge_and_process {sender} {canonical_commit}"
+    elif type_ == "note":
+        text = f"Re-read your role and constitution.\n\n{note_message}"
+    else:
+        return ""
+    if extra_body:
+        text += f"\n\n{extra_body}"
+    return text
 
 
-def write_handoff(headers, recipients, canonical_commit, sender):
+def write_handoff(headers, recipients, canonical_commit, sender, extra_body=""):
     timestamp_id = now_id_ts()
     created_at = now_iso()
     sequence = next_sequence()
@@ -87,7 +94,7 @@ def write_handoff(headers, recipients, canonical_commit, sender):
 
     lines.append(f"created_at: {created_at}")
     lines.append("")
-    lines.append(body_text(type_, sender, canonical_commit, headers.get("message", "")))
+    lines.append(body_text(type_, sender, canonical_commit, headers.get("message", ""), extra_body))
 
     for d in (tmp_dir, outbox_dir, state_dir() / "sent", state_dir() / "failed"):
         d.mkdir(parents=True, exist_ok=True)
@@ -123,6 +130,7 @@ def main():
         validation["recipients"],
         validation["canonical-commit"],
         sender,
+        parsed["body"],
     )
     draft.unlink()
     print(f"HANDOFF QUEUED: {outbox_file}")
