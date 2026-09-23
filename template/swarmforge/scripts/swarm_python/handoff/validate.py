@@ -22,6 +22,9 @@ type: note
 to: <role>[,<role>...]
 priority: NN
 message: <one line, max 80 chars>
+
+Optionally, after a blank line, add free-form text: defects, context,
+review notes. It is appended to the generated payload verbatim.
 """
 
 USAGE = USAGE_TEXT
