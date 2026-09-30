@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App, type TuiIO } from "../src/app.ts";
 import { menuItemIndex, menuItems } from "../src/menu.ts";
-import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../src/types.ts";
+import type { AttachResult, HandoffSnapshot, Lifecycle, LogFields, Role, TerminalSize } from "../src/types.ts";
 
 function makeRole(role: string, index: number): Role {
   return {
@@ -26,6 +26,7 @@ function emptySnapshot(): HandoffSnapshot {
 class FakeIO implements TuiIO {
   roles: Role[] = ROLES;
   snapshots = new Map<string, HandoffSnapshot>();
+  lifecycles: Record<string, Lifecycle> = {};
   socket = "/tmp/swarmforge/test.sock";
   socketOk = true;
   sessionAlive = true;
@@ -42,6 +43,10 @@ class FakeIO implements TuiIO {
 
   readSnapshot(role: Role): HandoffSnapshot {
     return this.snapshots.get(role.role) ?? emptySnapshot();
+  }
+
+  readLifecycles(): Record<string, Lifecycle> {
+    return this.lifecycles;
   }
 
   socketPath(): string {
@@ -180,6 +185,48 @@ test("an unexpected session end returns to the dashboard with a non-transient er
   await attaching;
   assert.equal(app.view, "dashboard");
   assert.equal(app.attachError, "server disconnected unexpectedly");
+});
+
+test("enter on a parked agent says it is unavailable instead of attaching", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "running", coder: "parked" };
+  const app = new App(io);
+  app.start();
+  app.selection = 1;
+  app.focus = "agents";
+  await app.press("enter");
+  assert.deepEqual(io.attaches, []);
+  assert.equal(app.view, "dashboard");
+  assert.equal(app.attachError, "Coder is not available at the moment (parked)");
+  assert.ok(io.logCalls.some((c) => c.event === "attach_unavailable" && c.fields.role === "coder"));
+});
+
+test("enter on a running agent still attaches when others are parked", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "parked", coder: "running" };
+  const app = new App(io);
+  app.start();
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  assert.equal(app.view, "attached");
+  io.detach();
+  await attaching;
+  assert.deepEqual(io.attaches, [{ session: "w2", socket: "/tmp/swarmforge/test.sock" }]);
+});
+
+test("starting and failed agents are unavailable too", async () => {
+  for (const lifecycle of ["starting", "failed"] as const) {
+    const io = new FakeIO();
+    io.lifecycles = { coder: lifecycle };
+    const app = new App(io);
+    app.start();
+    app.selection = 1;
+    app.focus = "agents";
+    await app.press("enter");
+    assert.deepEqual(io.attaches, []);
+    assert.equal(app.attachError, `Coder is not available at the moment (${lifecycle})`);
+  }
 });
 
 test("a clean detach clears a previous attach error", async () => {

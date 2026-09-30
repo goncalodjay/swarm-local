@@ -5,11 +5,12 @@ import { App, type TuiIO } from "../tui/src/app.ts";
 import { parseRoles } from "../tui/src/roles.ts";
 import { readHandoffSnapshot } from "../tui/src/handoffs.ts";
 import { appendLogEntry, logPathForRoot } from "../tui/src/log.ts";
+import { parseLifecycles } from "../tui/src/io.ts";
 import { frameModel, helpLines } from "../tui/src/render.ts";
 import { createTestRenderer } from "@opentui/core/testing";
 import { FrameMount } from "../tui/src/ui/dashboard.ts";
 import { selectTheme } from "../tui/src/theme.ts";
-import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../tui/src/types.ts";
+import type { AttachResult, HandoffSnapshot, Lifecycle, LogFields, Role, TerminalSize } from "../tui/src/types.ts";
 import { installTuiBundle, type InstallOutcome } from "../tui/src/install.ts";
 import { launchInstalledTui } from "../tui/test/helpers/launch-installed-tui.ts";
 
@@ -58,6 +59,11 @@ export class TestIO implements TuiIO {
 
   readSnapshot(role: Role): HandoffSnapshot {
     return readHandoffSnapshot(path.join(role.worktreePath, ".swarmforge", "handoffs"));
+  }
+
+  readLifecycles(): Record<string, Lifecycle> {
+    const file = path.join(this.world.root, ".swarmforge", "agents.json");
+    return existsSync(file) ? parseLifecycles(readFileSync(file, "utf8")) : {};
   }
 
   socketPath(): string {

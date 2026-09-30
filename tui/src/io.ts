@@ -7,7 +7,7 @@ import { appendLogEntry, logPathForRoot } from "./log.ts";
 import { child } from "./logger.ts";
 import { queryHerdrAgents as queryHerdrAgentsImpl } from "./herdr.ts";
 import type { TuiIO } from "./app.ts";
-import type { AttachResult, HerdrAgent, HandoffSnapshot, Role, TerminalSize } from "./types.ts";
+import type { AttachResult, HerdrAgent, HandoffSnapshot, Lifecycle, Role, TerminalSize } from "./types.ts";
 
 const log = child("io");
 
@@ -127,6 +127,32 @@ export function readSnapshotForRole(role: Role): {
   }
 }
 
+const LIFECYCLE_BY_STATUS: Record<string, Lifecycle> = {
+  running: "running",
+  wanted: "starting",
+  parked: "parked",
+  failed: "failed",
+};
+
+/** Parse the scheduler's agents.json into role -> lifecycle. */
+export function parseLifecycles(text: string): Record<string, Lifecycle> {
+  const out: Record<string, Lifecycle> = {};
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return out;
+  }
+  if (typeof data !== "object" || data === null) return out;
+  for (const [role, entry] of Object.entries(data as Record<string, unknown>)) {
+    const status = (entry as { status?: unknown } | null)?.status;
+    if (typeof status === "string" && status in LIFECYCLE_BY_STATUS) {
+      out[role] = LIFECYCLE_BY_STATUS[status];
+    }
+  }
+  return out;
+}
+
 export class FileSystemTuiIO implements TuiIO {
   root: string;
 
@@ -145,6 +171,17 @@ export class FileSystemTuiIO implements TuiIO {
 
   readSnapshot(role: Role): HandoffSnapshot {
     return readSnapshotForRole(role).snapshot;
+  }
+
+  readLifecycles(): Record<string, Lifecycle> {
+    const file = path.join(this.root, ".swarmforge", "agents.json");
+    if (!existsSync(file)) return {};
+    try {
+      return parseLifecycles(readFileSync(file, "utf8"));
+    } catch (err) {
+      log.warn({ event: "agents_read_failed", file, err: errMessage(err) }, "cannot read agents.json");
+      return {};
+    }
   }
 
   /** Returns the herdr session name (from .swarmforge/herdr-session), not a filesystem path. */

@@ -10,6 +10,14 @@ export interface Role {
 }
 
 export type Status = "working" | "finished-idle" | "needs-human" | "idle";
+
+/**
+ * Whether a role's agent process exists, as the swarm's scheduler records it
+ * in .swarmforge/agents.json. Roles are launched when work reaches them and
+ * parked (process stopped) when idle, so most roles are parked most of the
+ * time. `null` means the swarm predates on-demand agents: treat as running.
+ */
+export type Lifecycle = "running" | "starting" | "parked" | "failed";
 export type Marker = "spinner" | "dot" | "bang" | "blank";
 
 export interface HandoffInfo {
@@ -38,6 +46,7 @@ export interface AgentState {
   handoffs: HandoffSnapshot;
   herdrStatus: HerdrStatus | null;
   terminalTitle: string | null;
+  lifecycle: Lifecycle | null;
 }
 
 export type HerdrStatus = "working" | "idle" | "blocked" | "done" | "unknown";

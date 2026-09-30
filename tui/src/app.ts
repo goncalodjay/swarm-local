@@ -1,8 +1,8 @@
-import type { AgentState, AppView, AttachResult, FocusTarget, HerdrAgent, HerdrStatus, HandoffSnapshot, Key, Mode, Role, TerminalSize } from "./types.ts";
+import type { AgentState, AppView, AttachResult, FocusTarget, HerdrAgent, HerdrStatus, HandoffSnapshot, Key, Lifecycle, Mode, Role, TerminalSize } from "./types.ts";
 import { diagnoseAttachEnd } from "./attach.ts";
 import { moveSelection } from "./selection.ts";
 import { isDisabledMenuItem, menuItems, moveMenuFocus } from "./menu.ts";
-import { agentState } from "./status.ts";
+import { agentState, isAttachable, unavailableMessage } from "./status.ts";
 import { child } from "./logger.ts";
 import { findAgentForCwd } from "./herdr.ts";
 import { notifyBlocked, notifyFinished } from "./sound.ts";
@@ -16,6 +16,8 @@ const FOCUS_ORDER: FocusTarget[] = ["agents", "detail", "menu"];
 export interface TuiIO {
   readRoles(): Role[];
   readSnapshot(role: Role): HandoffSnapshot;
+  /** Role -> lifecycle from .swarmforge/agents.json; empty when absent. */
+  readLifecycles(): Record<string, Lifecycle>;
   socketPath(): string;
   socketAvailable(): boolean;
   terminalSize(): TerminalSize;
@@ -70,10 +72,17 @@ export class App {
   }
 
   refreshAgents(): void {
+    const lifecycles = this.io.readLifecycles();
     this.agents = this.roles.map((role) => {
       const snapshot = this.io.readSnapshot(role);
       const herdrAgent = findAgentForCwd(this.herdrAgents, role.worktreePath);
-      return agentState(role, snapshot, herdrAgent?.agent_status ?? null, herdrAgent?.terminal_title ?? null);
+      return agentState(
+        role,
+        snapshot,
+        herdrAgent?.agent_status ?? null,
+        herdrAgent?.terminal_title ?? null,
+        lifecycles[role.role] ?? null,
+      );
     });
     this.detectHerdrTransitions();
   }
@@ -233,6 +242,14 @@ export class App {
       return;
     }
     this.attachError = null;
+    if (!isAttachable(agent)) {
+      // A parked role's pane is an empty shell: handing the terminal to it
+      // would only show a prompt. Say so instead of attaching.
+      this.attachError = unavailableMessage(agent);
+      this.io.log("attach_unavailable", { role: agent.role, lifecycle: agent.lifecycle });
+      log.info({ event: "attach_unavailable", role: agent.role, lifecycle: agent.lifecycle }, "agent not running");
+      return;
+    }
     log.info(
       { event: "attach_start", role: agent.role, workspaceId: agent.workspaceId, socket: this.io.socketPath() },
       "attaching",
