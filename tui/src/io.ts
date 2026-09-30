@@ -171,6 +171,11 @@ export class FileSystemTuiIO implements TuiIO {
   }
 
   attach(workspaceId: string, herdrSession: string): Promise<AttachResult> {
+    const nestedBlock = nestedHerdrBlocked(herdrSession);
+    if (nestedBlock !== null) {
+      log.warn({ event: "attach_nested_blocked", workspaceId, herdrSession }, nestedBlock);
+      return Promise.resolve({ code: 1, reason: nestedBlock });
+    }
     return new Promise((resolve) => {
       releaseTty();
       log.info(
@@ -271,4 +276,38 @@ export class FileSystemTuiIO implements TuiIO {
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+export const NESTED_HERDR_HINT =
+  "herdr refuses to open inside herdr: set allow_nested = true under [experimental] " +
+  "in ~/.config/herdr/config.toml, or run the TUI from a plain terminal";
+
+/**
+ * Inside a herdr pane (HERDR_ENV=1) the attach client is itself a nested
+ * herdr, which herdr rejects unless `[experimental] allow_nested` is on. It
+ * prints that refusal to the terminal we hand over and the TUI then redraws
+ * on top of it, so probe first: a client started without a terminal reports
+ * either the refusal or, when nesting is allowed, that it has no terminal.
+ * Returns the hint to show when nesting is blocked, otherwise null.
+ */
+export function nestedHerdrBlocked(
+  herdrSession: string,
+  env: NodeJS.ProcessEnv = process.env,
+  probe: (session: string) => string = probeHerdrClient,
+): string | null {
+  if (env.HERDR_ENV !== "1") return null;
+  return /nested herdr is disabled/i.test(probe(herdrSession)) ? NESTED_HERDR_HINT : null;
+}
+
+function probeHerdrClient(herdrSession: string): string {
+  try {
+    const result = spawnSync("herdr", ["--session", herdrSession], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 3000,
+      encoding: "utf8",
+    });
+    return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  } catch (err) {
+    log.warn({ event: "nested_probe_failed", herdrSession, err: errMessage(err) }, "nested herdr probe failed");
+    return "";
+  }
 }
