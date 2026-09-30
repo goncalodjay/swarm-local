@@ -7,7 +7,7 @@ import { appendLogEntry, logPathForRoot } from "./log.ts";
 import { child } from "./logger.ts";
 import { queryHerdrAgents as queryHerdrAgentsImpl } from "./herdr.ts";
 import type { TuiIO } from "./app.ts";
-import type { AttachResult, HerdrAgent, HandoffSnapshot, Role, TerminalSize } from "./types.ts";
+import type { AttachResult, HerdrAgent, HandoffSnapshot, Lifecycle, Role, TerminalSize } from "./types.ts";
 
 const log = child("io");
 
@@ -127,6 +127,32 @@ export function readSnapshotForRole(role: Role): {
   }
 }
 
+const LIFECYCLE_BY_STATUS: Record<string, Lifecycle> = {
+  running: "running",
+  wanted: "starting",
+  parked: "parked",
+  failed: "failed",
+};
+
+/** Parse the scheduler's agents.json into role -> lifecycle. */
+export function parseLifecycles(text: string): Record<string, Lifecycle> {
+  const out: Record<string, Lifecycle> = {};
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return out;
+  }
+  if (typeof data !== "object" || data === null) return out;
+  for (const [role, entry] of Object.entries(data as Record<string, unknown>)) {
+    const status = (entry as { status?: unknown } | null)?.status;
+    if (typeof status === "string" && status in LIFECYCLE_BY_STATUS) {
+      out[role] = LIFECYCLE_BY_STATUS[status];
+    }
+  }
+  return out;
+}
+
 export class FileSystemTuiIO implements TuiIO {
   root: string;
 
@@ -145,6 +171,17 @@ export class FileSystemTuiIO implements TuiIO {
 
   readSnapshot(role: Role): HandoffSnapshot {
     return readSnapshotForRole(role).snapshot;
+  }
+
+  readLifecycles(): Record<string, Lifecycle> {
+    const file = path.join(this.root, ".swarmforge", "agents.json");
+    if (!existsSync(file)) return {};
+    try {
+      return parseLifecycles(readFileSync(file, "utf8"));
+    } catch (err) {
+      log.warn({ event: "agents_read_failed", file, err: errMessage(err) }, "cannot read agents.json");
+      return {};
+    }
   }
 
   /** Returns the herdr session name (from .swarmforge/herdr-session), not a filesystem path. */
@@ -255,6 +292,27 @@ export class FileSystemTuiIO implements TuiIO {
     return queryHerdrAgentsImpl();
   }
 
+  stopSwarm(): Promise<void> {
+    return new Promise((resolve) => {
+      let proc: ChildProcess;
+      try {
+        proc = spawn("bash", stopSwarmArgs(this.root), { stdio: "ignore" });
+      } catch (err) {
+        log.error({ event: "swarm_stop_spawn_failed", err: errMessage(err) }, "cannot run swarm stop");
+        resolve();
+        return;
+      }
+      proc.on("error", (err) => {
+        log.error({ event: "swarm_stop_error", err: errMessage(err) }, "swarm stop failed");
+        resolve();
+      });
+      proc.on("exit", (code) => {
+        log.info({ event: "swarm_stopped", code }, "swarm stop finished");
+        resolve();
+      });
+    });
+  }
+
   log(event: string, fields: Record<string, string | number | boolean | null>): void {
     appendLogEntry(logPathForRoot(this.root), event, fields);
   }
@@ -277,6 +335,23 @@ export class FileSystemTuiIO implements TuiIO {
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+/** `bash <root>/swarm stop`: the project's launcher tears the swarm down. */
+export function stopSwarmArgs(root: string): string[] {
+  return [path.join(root, "swarm"), "stop"];
+}
+
+/**
+ * Synchronous variant for signal handlers (terminal closed, SIGTERM), where
+ * the process is about to die and cannot wait on a callback.
+ */
+export function stopSwarmSync(root: string): void {
+  try {
+    spawnSync("bash", stopSwarmArgs(root), { stdio: "ignore", timeout: 60_000 });
+  } catch (err) {
+    log.error({ event: "swarm_stop_sync_failed", err: errMessage(err) }, "cannot run swarm stop");
+  }
+}
+
 export const NESTED_HERDR_HINT =
   "herdr refuses to open inside herdr: set allow_nested = true under [experimental] " +
   "in ~/.config/herdr/config.toml, or run the TUI from a plain terminal";

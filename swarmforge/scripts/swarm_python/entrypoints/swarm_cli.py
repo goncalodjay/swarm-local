@@ -7,13 +7,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import dataclasses
 import os
 import subprocess
-import time
 from dataclasses import replace
 
+from swarm_python import agent_state
 from swarm_python.ansi import BOLD, CYAN, GREEN, RED, RESET, YELLOW
 from swarm_python.config import AGENT_WINDOW, RoleRow, parse_config
 from swarm_python.deps import check_backends, command_exists, require
-from swarm_python.env import env_long
 from swarm_python.git_ops import (
     init_repo_if_missing,
     prepare_handoff_dirs,
@@ -23,14 +22,16 @@ from swarm_python.git_ops import (
 )
 from swarm_python.herdr_ops import (
     ensure_session_server,
+    is_session_running,
     workspace_close,
     workspace_create,
     workspace_list,
 )
-from swarm_python.launch import build_launch_command, send_launch_command, write_launch_script
+from swarm_python.launch import build_launch_command
 from swarm_python.paths import build_context
+from swarm_python.scheduler import HerdrPanes
 from swarm_python.sleep_inhibit import prefix as sleep_inhibit_prefix
-from swarm_python.tsv import write_tsv
+from swarm_python.tsv import read_tsv, write_tsv
 
 HANDOFFD = Path(__file__).resolve().parent / "handoffd.py"
 STOP_DAEMON = Path(__file__).resolve().parent / "stop_handoff_daemon.py"
@@ -132,16 +133,6 @@ def start_handoff_daemon(ctx):
     print(f"{GREEN}Started handoff daemon{extra}.{RESET}")
 
 
-def launch_role(ctx, index, row: RoleRow):
-    command = build_launch_command(ctx, index, row)
-    script_path = write_launch_script(ctx, row.role, command)
-    send_launch_command(ctx.herdr_session, row.pane_id, script_path)
-    print(
-        f"  {CYAN}[{row.display_name}]{RESET} started in workspace {row.workspace_id} "
-        f"({row.pane_id})"
-    )
-
-
 def create_role_workspaces(ctx, roles):
     # cwd is ctx.working_dir, not the role's worktree: worktrees are created
     # by prepare_worktrees() right after this, and the launch command's own
@@ -163,7 +154,7 @@ def kill_existing_workspaces(ctx, roles):
             workspace_close(ctx.herdr_session, w["workspace_id"])
 
 
-def run_main(root: str):
+def run_main(root: str, open_tui: bool = True):
     require("herdr")
     require("git")
     require("engram")
@@ -200,14 +191,23 @@ def run_main(root: str):
         ctx.roles_file,
         ctx.herdr_session_file,
     )
+    # Only the first role (the specifier) starts now. The handoff daemon
+    # launches every other role when work reaches it and parks it again
+    # once it is idle, so a swarm keeps one agent in memory, not four.
+    role_names = [r.role for r in roles]
+    previous = agent_state.load(ctx.state_dir, role_names)
+    agent_state.save(ctx.state_dir, agent_state.initial_state(role_names, previous))
     start_handoff_daemon(ctx)
+    print(
+        f"{GREEN}Starting {roles[0].display_name}; the other roles start "
+        f"when work reaches them.{RESET}"
+    )
 
-    print(f"{GREEN}Starting agents...{RESET}")
-    delay = env_long("SWARMFORGE_AGENT_START_DELAY_MS", 1500)
-    for i, r in enumerate(roles):
-        if i > 0:
-            time.sleep(delay / 1000)
-        launch_role(ctx, i, r)
+    if open_tui:
+        # The TUI holds the user until the specifier is ready, and quitting
+        # it runs `./swarm stop`, so this one command covers the whole run.
+        run_tui(str(ctx.working_dir))
+        return
 
     print()
     print(f"{GREEN}{BOLD}SwarmForge is ready.{RESET}")
@@ -215,11 +215,46 @@ def run_main(root: str):
     print("Workspaces:")
     for r in roles:
         print(f"  {r.display_name}: {r.workspace_id} ({r.pane_id})")
+    print(f"Agent states: {agent_state.state_path(ctx.state_dir)}")
     print()
     print(f"{GREEN}Tip: Write a handoff draft and run swarm_handoff.sh while "
           f"the swarm is running.{RESET}")
     print(f"{GREEN}Tip: View or attach with 'herdr session attach "
           f"{ctx.herdr_session}' if needed.{RESET}")
+    print(f"{GREEN}Tip: Stop everything with './swarm stop'.{RESET}")
+
+
+def stop_swarm(root: str):
+    """Tear a swarm down so nothing keeps holding memory: the scheduler
+    first (so it cannot relaunch anything), then every role's agent, then
+    the workspaces and the swarm's herdr server. Each role keeps its feature
+    and session in agents.json, so the next `./swarm` resumes them."""
+    ctx = build_context(Path(root).resolve(), Path(__file__).resolve().parent.parent.parent)
+    stop_handoff_daemon(ctx)
+
+    rows = read_tsv(ctx.roles_file)
+    role_names = [row[0] for row in rows if row]
+    session = ctx.herdr_session
+    if ctx.herdr_session_file.exists():
+        session = ctx.herdr_session_file.read_text(encoding="utf-8").strip() or session
+
+    if is_session_running(session):
+        panes = HerdrPanes(session)
+        for row in rows:
+            if len(row) > 7 and row[7]:
+                panes.stop(row[7])
+        labels = {row[3] for row in rows if len(row) > 3}
+        for w in workspace_list(session):
+            if w.get("label") in labels:
+                workspace_close(session, w["workspace_id"])
+        subprocess.run(["herdr", "--session", session, "server", "stop"], capture_output=True)
+
+    if role_names and agent_state.state_path(ctx.state_dir).exists():
+        state = agent_state.load(ctx.state_dir, role_names)
+        for st in state.values():
+            st["status"] = "parked"
+        agent_state.save(ctx.state_dir, state)
+    print(f"{GREEN}SwarmForge stopped.{RESET}")
     print()
 
 
@@ -267,10 +302,6 @@ def test_launch_command(root: str, agent: str, extra_args: str = ""):
     print(build_launch_command(ctx, 1, row))
 
 
-def test_agent_start_delay():
-    print(env_long("SWARMFORGE_AGENT_START_DELAY_MS", 1500))
-
-
 def test_sleep_inhibitor_prefix():
     print(" ".join(sleep_inhibit_prefix()))
 
@@ -286,13 +317,15 @@ def main():
     cmd = args[0]
     if cmd == "tui":
         run_tui(args[1] if len(args) > 1 else cwd)
+    elif cmd == "stop":
+        stop_swarm(args[1] if len(args) > 1 else cwd)
+    elif cmd == "--no-tui":
+        run_main(args[1] if len(args) > 1 else cwd, open_tui=False)
     elif cmd == "--test-parse":
         test_parse(args[1] if len(args) > 1 else cwd)
     elif cmd == "--test-launch-command":
         root = args[1] if len(args) > 1 else cwd
         test_launch_command(root, args[2], args[3] if len(args) > 3 else "")
-    elif cmd == "--test-agent-start-delay":
-        test_agent_start_delay()
     elif cmd == "--test-sleep-inhibitor-prefix":
         test_sleep_inhibitor_prefix()
     else:

@@ -9,6 +9,7 @@ import {
   renderAgentRow,
   renderAgentsPanel,
   renderDetailPane,
+  detailLines,
   renderFooter,
   renderError,
   renderTooSmall,
@@ -45,6 +46,20 @@ test("renderAgentRow shows marker and task", () => {
   assert.ok(row.includes("◐"));
   assert.ok(row.includes("coder"));
   assert.ok(row.includes("fix-login"));
+});
+
+test("renderAgentRow tags roles whose agent is not running", () => {
+  const parked = { ...agent(roles[1], "blank", null), lifecycle: "parked" as const };
+  assert.equal(renderAgentRow(parked, false), "    coder (parked)");
+  const running = { ...agent(roles[1], "spinner", "fix-login"), lifecycle: "running" as const };
+  assert.ok(!renderAgentRow(running, false).includes("("));
+});
+
+test("detailLines explains a parked agent instead of a herdr fault", () => {
+  const parked = { ...agent(roles[1], "blank", null), lifecycle: "parked" as const };
+  const text = detailLines(parked).map((l) => l.text);
+  assert.ok(text.includes("Agent: parked — starts when work reaches it"));
+  assert.ok(!text.some((t) => t.startsWith("Herdr: not detected")));
 });
 
 test("renderAgentRow marks selection", () => {

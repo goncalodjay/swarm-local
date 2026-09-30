@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { App, type TuiIO } from "../src/app.ts";
+import { App, STARTUP_TIMEOUT_MS, type TuiIO } from "../src/app.ts";
+import type { HerdrAgent } from "../src/herdr.ts";
+import { frameModel } from "../src/render.ts";
 import { menuItemIndex, menuItems } from "../src/menu.ts";
-import type { AttachResult, HandoffSnapshot, LogFields, Role, TerminalSize } from "../src/types.ts";
+import type { AttachResult, HandoffSnapshot, Lifecycle, LogFields, Role, TerminalSize } from "../src/types.ts";
 
 function makeRole(role: string, index: number): Role {
   return {
@@ -26,6 +28,9 @@ function emptySnapshot(): HandoffSnapshot {
 class FakeIO implements TuiIO {
   roles: Role[] = ROLES;
   snapshots = new Map<string, HandoffSnapshot>();
+  lifecycles: Record<string, Lifecycle> = {};
+  herdrAgents: HerdrAgent[] = [];
+  stopCalls = 0;
   socket = "/tmp/swarmforge/test.sock";
   socketOk = true;
   sessionAlive = true;
@@ -42,6 +47,26 @@ class FakeIO implements TuiIO {
 
   readSnapshot(role: Role): HandoffSnapshot {
     return this.snapshots.get(role.role) ?? emptySnapshot();
+  }
+
+  readLifecycles(): Record<string, Lifecycle> {
+    return this.lifecycles;
+  }
+
+  queryHerdrAgents(): Promise<HerdrAgent[]> {
+    return Promise.resolve(this.herdrAgents);
+  }
+
+  stopSwarm(): Promise<void> {
+    this.stopCalls += 1;
+    return Promise.resolve();
+  }
+
+  herdrStatus(role: string, status: HerdrAgent["agent_status"]): void {
+    this.herdrAgents = [{
+      agent: "claude", cwd: `/p/.worktrees/${role}`, agent_status: status,
+      terminal_title: null, terminal_title_stripped: null, pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1",
+    }];
   }
 
   socketPath(): string {
@@ -180,6 +205,50 @@ test("an unexpected session end returns to the dashboard with a non-transient er
   await attaching;
   assert.equal(app.view, "dashboard");
   assert.equal(app.attachError, "server disconnected unexpectedly");
+});
+
+test("enter on a parked agent says it is unavailable instead of attaching", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "running", coder: "parked" };
+  io.herdrStatus("specifier", "idle");
+  const app = new App(io);
+  app.start();
+  await settle(app);
+  app.selection = 1;
+  app.focus = "agents";
+  await app.press("enter");
+  assert.deepEqual(io.attaches, []);
+  assert.equal(app.view, "dashboard");
+  assert.equal(app.attachError, "Coder is not available at the moment (parked)");
+  assert.ok(io.logCalls.some((c) => c.event === "attach_unavailable" && c.fields.role === "coder"));
+});
+
+test("enter on a running agent still attaches when others are parked", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "parked", coder: "running" };
+  const app = new App(io);
+  app.start();
+  app.selection = 1;
+  app.focus = "agents";
+  const attaching = app.press("enter");
+  assert.equal(app.view, "attached");
+  io.detach();
+  await attaching;
+  assert.deepEqual(io.attaches, [{ session: "w2", socket: "/tmp/swarmforge/test.sock" }]);
+});
+
+test("starting and failed agents are unavailable too", async () => {
+  for (const lifecycle of ["starting", "failed"] as const) {
+    const io = new FakeIO();
+    io.lifecycles = { coder: lifecycle };
+    const app = new App(io);
+    app.start();
+    app.selection = 1;
+    app.focus = "agents";
+    await app.press("enter");
+    assert.deepEqual(io.attaches, []);
+    assert.equal(app.attachError, `Coder is not available at the moment (${lifecycle})`);
+  }
 });
 
 test("a clean detach clears a previous attach error", async () => {
@@ -371,6 +440,108 @@ test("quit restores the terminal and quits", async () => {
   await app.press("quit");
   assert.equal(io.restored, true);
   assert.equal(io.quitCalled, true);
+});
+
+test("quit stops the whole swarm before exiting", async () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  await app.press("ctrl+k");
+  await app.press("quit");
+  assert.equal(io.stopCalls, 1);
+  assert.equal(io.quitCalled, true);
+  assert.ok(io.logCalls.some((c) => c.event === "swarm_stop"));
+  await app.press("quit");
+  assert.equal(io.stopCalls, 1, "a second quit while stopping does nothing");
+});
+
+async function settle(app: App): Promise<void> {
+  app.poll();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test("a starting swarm blocks every key but quit until the specifier is ready", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "starting", coder: "parked" };
+  const app = new App(io);
+  app.start();
+  assert.equal(app.starting, true);
+  assert.equal(frameModel(app).view, "starting");
+
+  await app.press("down");
+  await app.press("enter");
+  assert.equal(app.selection, 0);
+  assert.deepEqual(io.attaches, []);
+
+  io.lifecycles = { specifier: "running", coder: "parked" };
+  io.herdrStatus("specifier", "working");
+  await settle(app);
+  assert.equal(app.starting, true, "still loading its instructions");
+
+  io.herdrStatus("specifier", "idle");
+  await settle(app);
+  assert.equal(app.starting, false);
+  assert.equal(frameModel(app).view, "dashboard");
+  assert.ok(io.logCalls.some((c) => c.event === "swarm_ready"));
+});
+
+test("a specifier blocked on a question to the human counts as ready", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "running" };
+  io.herdrStatus("specifier", "blocked");
+  const app = new App(io);
+  app.start();
+  await settle(app);
+  assert.equal(app.starting, false);
+});
+
+test("the startup gate opens after a timeout when herdr cannot see the agent", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "running" };
+  const app = new App(io);
+  let now = 1_000;
+  app.now = () => now;
+  app.start();
+  assert.equal(app.starting, true);
+  now += STARTUP_TIMEOUT_MS - 1;
+  await settle(app);
+  assert.equal(app.starting, true);
+  now += 2;
+  await settle(app);
+  assert.equal(app.starting, false);
+});
+
+test("a failed specifier opens the dashboard instead of waiting forever", () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "failed" };
+  const app = new App(io);
+  app.start();
+  assert.equal(app.starting, false);
+});
+
+test("quit while starting still stops the swarm", async () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "starting" };
+  const app = new App(io);
+  app.start();
+  await app.press("quit");
+  assert.equal(io.stopCalls, 1);
+  assert.equal(io.quitCalled, true);
+});
+
+test("reattaching mid-feature with the specifier parked is not gated", () => {
+  const io = new FakeIO();
+  io.lifecycles = { specifier: "parked", coder: "running" };
+  const app = new App(io);
+  app.start();
+  assert.equal(app.starting, false);
+});
+
+test("a swarm without agents.json is never gated", () => {
+  const io = new FakeIO();
+  const app = new App(io);
+  app.start();
+  assert.equal(app.starting, false);
 });
 
 test("ctrl+k enters prefix mode and esc cancels it", async () => {

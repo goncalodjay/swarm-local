@@ -8,12 +8,19 @@ import os
 import signal
 import threading
 import time
+from dataclasses import replace
 
+from swarm_python import agent_state
+from swarm_python.config import parse_config
 from swarm_python.handoff.timefmt import now_iso
 from swarm_python.herdr_ops import pane_run
+from swarm_python.launch import start_role
+from swarm_python.paths import build_context
+from swarm_python.scheduler import WAKE_MESSAGE, HerdrPanes, Scheduler
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent
 
 POLL_MS = 1000
-WAKE_MESSAGE = "You have new handoff mail. If idle, run ready_for_next.sh."
 
 _stopping = threading.Event()
 
@@ -104,7 +111,11 @@ def fail_(path, reason, log_file, daemon_dir):
     move_with_collision(path, failed_dir)
 
 
-def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir):
+def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir,
+            is_running=lambda role: True, on_sent=lambda sender, task: None):
+    """Move one outbox handoff into each recipient's inbox. Running
+    recipients get a wake-up in their pane; parked ones are launched by the
+    scheduler on its next tick, which finds the mail waiting."""
     filename = path.name
     message = parse_message(path)
     headers = message["headers"]
@@ -127,7 +138,9 @@ def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir):
                 render_message(delivered_headers, message["body"]),
                 encoding="utf-8",
             )
-        notify(herdr_session, role_info["pane-id"])
+        if is_running(recipient):
+            notify(herdr_session, role_info["pane-id"])
+    on_sent(sender_role, headers.get("task", ""))
     sender_info = roles.get(sender_role)
     if sender_info:
         sent_dir = (
@@ -164,13 +177,42 @@ def sleep_poll(ms, stop_file):
         remaining -= step
 
 
-def poll_once(state_dir, daemon_dir, stop_file, log_file):
+def build_scheduler(project_root, log_file, daemon_dir):
+    """Scheduler over the swarm's roles, with the pane ids ./swarm recorded
+    in roles.tsv when it created each role's herdr workspace."""
+    ctx = build_context(project_root, SCRIPTS_DIR)
+    rows = parse_config(ctx)
+    recorded = {}
+    for line in ctx.roles_file.read_text(encoding="utf-8").splitlines():
+        fields = line.split("\t")
+        if len(fields) > 8:
+            recorded[fields[0]] = (fields[7], fields[8])
+    for row in rows:
+        row.pane_id, row.workspace_id = recorded.get(row.role, ("", ""))
+    ctx = replace(ctx, roles=tuple(rows))
+    return Scheduler(
+        rows,
+        HerdrPanes(ctx.herdr_session),
+        launcher=lambda index, row, plan: start_role(ctx, index, row, plan),
+        log=lambda *parts: log(log_file, daemon_dir, *parts),
+    )
+
+
+def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None):
     if should_stop(stop_file):
         return
     roles_file = state_dir / "roles.tsv"
     session_file = state_dir / "herdr-session"
     roles = load_roles(roles_file)
     herdr_session = session_file.read_text(encoding="utf-8").strip()
+    state = None
+    delivery_hooks = {}
+    if scheduler is not None:
+        state = agent_state.load(state_dir, [row.role for row in scheduler.rows])
+        delivery_hooks = {
+            "is_running": lambda role: scheduler.is_running(state, role),
+            "on_sent": lambda sender, task: scheduler.on_sent(state, sender, task),
+        }
     for role, role_info in roles.items():
         if should_stop(stop_file):
             break
@@ -178,7 +220,8 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file):
             if should_stop(stop_file):
                 break
             try:
-                deliver(roles, herdr_session, role, path, log_file, daemon_dir)
+                deliver(roles, herdr_session, role, path, log_file, daemon_dir,
+                        **delivery_hooks)
             except Exception as e:
                 log(log_file, daemon_dir, "error", str(path), str(e))
                 try:
@@ -191,6 +234,13 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file):
                         str(path),
                         str(nested),
                     )
+    if scheduler is None or should_stop(stop_file):
+        return
+    try:
+        scheduler.tick(state)
+    except Exception as e:
+        log(log_file, daemon_dir, "scheduler-error", repr(e))
+    agent_state.save(state_dir, state)
 
 
 def main():
@@ -213,9 +263,10 @@ def main():
     pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
 
     log(log_file, daemon_dir, "started")
+    scheduler = build_scheduler(project_root, log_file, daemon_dir)
     try:
         while not should_stop(stop_file):
-            poll_once(state_dir, daemon_dir, stop_file, log_file)
+            poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler)
             sleep_poll(POLL_MS, stop_file)
     finally:
         pid_file.unlink(missing_ok=True)

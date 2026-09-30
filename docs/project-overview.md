@@ -41,7 +41,7 @@ swarm-local/
 3. Delega a `./swarm-init /ruta/al/proyecto`, que pregunta lenguajes, auto-approve y (por cada rol) agente → proveedor → modelo → nivel de razonamiento.
 4. `swarm-init` copia `template/swarmforge/`, `template/toolchain/`, `template/swarm`, y el binario de la TUI al target. Edita `swarmforge/swarmforge.conf` con las elecciones y sustituye `{{LANGUAGES}}` en la constitución.
 5. En el proyecto destino, `./swarm` valida que `herdr` y `engram` estén instalados (`require("herdr")`, `require("engram")`, igual que `git`), levanta 4 workspaces de herdr (uno por rol, dentro de una sesión de herdr con nombre `swarmforge-<hash del path>`) con `ENGRAM_PROJECT` exportado al mismo valor en las cuatro, y lanza el agente CLI correspondiente con sus flags.
-6. `./swarm tui` adjunta la TUI a esos workspaces para inspeccionar/adjuntar manualmente.
+6. `./swarm` termina abriendo la TUI, que espera a que el `specifier` esté listo antes de dejar entrar. Solo el `specifier` arranca al inicio; el daemon de handoffs lanza cada otro rol cuando le llega trabajo y lo estaciona al quedar libre. Salir de la TUI (`q`) ejecuta `./swarm stop`, que detiene todos los agentes, el daemon y la sesión de herdr. `./swarm tui` reabre la TUI sobre un swarm en marcha.
 
 ## Memoria compartida
 
