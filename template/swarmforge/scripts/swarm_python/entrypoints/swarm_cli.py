@@ -192,7 +192,9 @@ def run_main(root: str):
     # Only the first role (the specifier) starts now. The handoff daemon
     # launches every other role when work reaches it and parks it again
     # once it is idle, so a swarm keeps one agent in memory, not four.
-    agent_state.save(ctx.state_dir, agent_state.initial_state([r.role for r in roles]))
+    role_names = [r.role for r in roles]
+    previous = agent_state.load(ctx.state_dir, role_names)
+    agent_state.save(ctx.state_dir, agent_state.initial_state(role_names, previous))
     start_handoff_daemon(ctx)
     print(
         f"{GREEN}Starting {roles[0].display_name}; the other roles start "

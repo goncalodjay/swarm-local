@@ -19,6 +19,9 @@ Per role:
   sent_since_launch  the role forwarded a handoff since its last launch
   idle_since      epoch seconds herdr first reported it idle with no
                   pending work (None while busy)
+  mail_waiting_since  epoch seconds it was first seen idle with unread mail
+                  and nothing in progress (None otherwise); drives re-sent
+                  wake-ups
   fast_exits      consecutive launches whose agent exited right away while
                   work was pending; the scheduler stops retrying at a limit
 """
@@ -42,17 +45,30 @@ def blank_role(status: str = "parked") -> dict:
         "launched_at": None,
         "sent_since_launch": False,
         "idle_since": None,
+        "mail_waiting_since": None,
         "fast_exits": 0,
     }
 
 
-def initial_state(roles: list[str]) -> dict:
-    """Fresh swarm: the first role (the specifier) is wanted, every other
-    role starts parked and is launched on demand when work reaches it."""
-    return {
-        role: blank_role("wanted" if index == 0 else "parked")
-        for index, role in enumerate(roles)
-    }
+# Carried over when the swarm restarts, so a restart mid-feature resumes the
+# roles' sessions instead of starting them over.
+KEPT_ACROSS_RESTARTS = ("task", "session_id")
+
+
+def initial_state(roles: list[str], previous: dict | None = None) -> dict:
+    """State for a swarm that is starting: the first role (the specifier) is
+    wanted, every other role starts parked and is launched on demand when
+    work reaches it. `previous` (the last run's state) contributes only each
+    role's feature and session, so those resume; nothing is running yet."""
+    previous = previous or {}
+    state = {}
+    for index, role in enumerate(roles):
+        st = blank_role("wanted" if index == 0 else "parked")
+        for key in KEPT_ACROSS_RESTARTS:
+            if key in previous.get(role, {}):
+                st[key] = previous[role][key]
+        state[role] = st
+    return state
 
 
 def load(state_dir: Path, roles: list[str]) -> dict:

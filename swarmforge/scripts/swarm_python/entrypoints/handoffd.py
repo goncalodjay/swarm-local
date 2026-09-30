@@ -16,12 +16,11 @@ from swarm_python.handoff.timefmt import now_iso
 from swarm_python.herdr_ops import pane_run
 from swarm_python.launch import start_role
 from swarm_python.paths import build_context
-from swarm_python.scheduler import HerdrPanes, Scheduler
+from swarm_python.scheduler import WAKE_MESSAGE, HerdrPanes, Scheduler
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent
 
 POLL_MS = 1000
-WAKE_MESSAGE = "You have new handoff mail. If idle, run ready_for_next.sh."
 
 _stopping = threading.Event()
 

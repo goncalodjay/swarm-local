@@ -36,6 +36,7 @@ class FakeHerdr:
         self.status = {}      # pane_id -> herdr agent_status
         self.agent_up = {}    # pane_id -> is an agent in the foreground
         self.stopped = []
+        self.woken = []
         self.answer = True
 
     def pane_statuses(self):
@@ -49,6 +50,9 @@ class FakeHerdr:
     def stop(self, pane_id):
         self.stopped.append(pane_id)
         self.agent_up[pane_id] = False
+
+    def wake(self, pane_id):
+        self.woken.append(pane_id)
 
 
 class Clock:
@@ -223,6 +227,37 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(len(coder_launches), sched.MAX_FAST_EXITS)
         self.assertEqual(self.state["coder"]["status"], "failed")
 
+    def test_idle_agent_with_unread_mail_is_woken_again(self):
+        self.state["specifier"]["status"] = "parked"
+        self.state["coder"]["status"] = "wanted"
+        self.s.tick(self.state)
+        self.clock.now += 30
+        write_handoff(self.row("coder").worktree_path, "new", "a.handoff", task="login")
+        self.idle("coder")
+        self.s.tick(self.state)
+        self.clock.now += sched.NUDGE_AFTER_S - 1
+        self.s.tick(self.state)
+        self.assertEqual(self.herdr.woken, [])
+        self.clock.now += 2
+        self.s.tick(self.state)
+        self.assertEqual(self.herdr.woken, [self.row("coder").pane_id])
+        self.clock.now += sched.NUDGE_AFTER_S
+        self.s.tick(self.state)
+        self.assertEqual(len(self.herdr.woken), 2)
+
+    def test_idle_agent_with_a_task_in_progress_is_not_nudged(self):
+        self.state["specifier"]["status"] = "parked"
+        self.state["coder"]["status"] = "wanted"
+        self.s.tick(self.state)
+        self.clock.now += 30
+        write_handoff(self.row("coder").worktree_path, "in_process", "a.handoff", task="login")
+        write_handoff(self.row("coder").worktree_path, "new", "b.handoff", task="login")
+        self.idle("coder")
+        for _ in range(3):
+            self.s.tick(self.state)
+            self.clock.now += sched.NUDGE_AFTER_S
+        self.assertEqual(self.herdr.woken, [])
+
     def test_no_answer_from_herdr_changes_nothing(self):
         self.s.tick(self.state)
         self.herdr.answer = False
@@ -233,6 +268,16 @@ class SchedulerTest(unittest.TestCase):
 
 
 class StateFileTest(unittest.TestCase):
+    def test_restart_keeps_sessions_but_nothing_runs(self):
+        previous = agent_state.initial_state(ROLES)
+        previous["coder"].update(status="running", task="login", session_id="s-1", fast_exits=2)
+        state = agent_state.initial_state(ROLES, previous)
+        self.assertEqual(state["coder"]["task"], "login")
+        self.assertEqual(state["coder"]["session_id"], "s-1")
+        self.assertEqual(state["coder"]["status"], "parked")
+        self.assertEqual(state["coder"]["fast_exits"], 0)
+        self.assertEqual(state["specifier"]["status"], "wanted")
+
     def test_round_trip_fills_missing_fields(self):
         with tempfile.TemporaryDirectory() as d:
             state = agent_state.initial_state(ROLES)

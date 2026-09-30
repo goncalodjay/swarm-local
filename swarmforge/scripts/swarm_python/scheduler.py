@@ -15,6 +15,11 @@ role's agent alive and idle, the handoff daemon calls `tick` every poll:
   still has work it is relaunched, with a fresh session when it died right
   after launch (a resume that failed), up to MAX_FAST_EXITS times.
 
+- A running agent that sits idle with unread mail (inbox/new) and no task
+  in progress is sent the wake-up again every NUDGE_AFTER seconds: agents
+  ignore wake-ups while busy, so one can be lost. An idle agent WITH a
+  task in progress is left alone; it is usually waiting for the human.
+
 Roles overlap briefly by design: the recipient starts as soon as mail
 arrives while the sender is still finishing up.
 """
@@ -36,7 +41,9 @@ START_GRACE_S = 20
 FAST_EXIT_S = 60
 MAX_FAST_EXITS = 3
 STOP_TIMEOUT_S = 10
+NUDGE_AFTER_S = env_long("SWARMFORGE_NUDGE_AFTER_MS", 60000) / 1000
 IDLE_STATUSES = {"idle", "done"}
+WAKE_MESSAGE = "You have new handoff mail. If idle, run ready_for_next.sh."
 
 
 def _inbox(worktree: Path) -> Path:
@@ -49,6 +56,14 @@ def pending_work(worktree: Path) -> bool:
         handoff_files(inbox / "new")
         or handoff_files(inbox / "in_process")
         or batch_dirs(inbox / "in_process")
+    )
+
+
+def unread_mail_only(worktree: Path) -> bool:
+    """Mail waiting in inbox/new while nothing is in progress."""
+    inbox = _inbox(worktree)
+    return bool(handoff_files(inbox / "new")) and not (
+        handoff_files(inbox / "in_process") or batch_dirs(inbox / "in_process")
     )
 
 
@@ -71,8 +86,8 @@ class Scheduler:
     def __init__(self, rows, herdr, launcher, log, clock=time.time):
         """rows: RoleRow list in config order (index 0 is the specifier).
         herdr: object with pane_statuses() -> {pane_id: status},
-               foreground(pane_id) -> (pgid, shell_pid) and
-               stop(pane_id) -> None.
+               foreground(pane_id) -> (pgid, shell_pid),
+               stop(pane_id) -> None and wake(pane_id) -> None.
         launcher: callable(index, row, SessionPlan | None) starting the
                   role's agent in its pane."""
         self.rows = rows
@@ -124,9 +139,11 @@ class Scheduler:
 
         if since_launch >= FAST_EXIT_S:
             st["fast_exits"] = 0
+        idle = statuses.get(row.pane_id) in IDLE_STATUSES
+        self._nudge_if_mail_is_waiting(row, st, idle, now)
         parkable = (
             not pending
-            and statuses.get(row.pane_id) in IDLE_STATUSES
+            and idle
             and (index > 0 or st["sent_since_launch"])
         )
         if not parkable:
@@ -141,6 +158,17 @@ class Scheduler:
         self.herdr.stop(row.pane_id)
         self._mark_parked(st)
         return True  # just parked; nothing is pending, so no relaunch
+
+    def _nudge_if_mail_is_waiting(self, row, st, idle, now) -> None:
+        if not (idle and unread_mail_only(row.worktree_path)):
+            st["mail_waiting_since"] = None
+            return
+        if st["mail_waiting_since"] is None:
+            st["mail_waiting_since"] = now
+        elif now - st["mail_waiting_since"] >= NUDGE_AFTER_S:
+            self.log("nudging", row.role)
+            self.herdr.wake(row.pane_id)
+            st["mail_waiting_since"] = now
 
     def _launch(self, index, row, st, now) -> None:
         if st["fast_exits"] >= MAX_FAST_EXITS:
@@ -162,6 +190,7 @@ class Scheduler:
             launched_at=now,
             sent_since_launch=False,
             idle_since=None,
+            mail_waiting_since=None,
         )
 
     @staticmethod
@@ -183,6 +212,10 @@ class HerdrPanes:
     def foreground(self, pane_id):
         from .herdr_ops import pane_foreground
         return pane_foreground(self.session, pane_id)
+
+    def wake(self, pane_id):
+        from .herdr_ops import pane_run
+        pane_run(self.session, pane_id, WAKE_MESSAGE)
 
     def stop(self, pane_id):
         """Stop whatever runs in the pane (agent plus its launch wrapper)
