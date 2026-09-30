@@ -106,10 +106,10 @@ test("renderError shows unavailable message", () => {
 });
 
 test("renderTooSmall shows current and required sizes", () => {
-  const lines = renderTooSmall({ cols: 80, rows: 24 }, { cols: 100, rows: 30 });
+  const lines = renderTooSmall({ cols: 60, rows: 20 }, { cols: 80, rows: 24 });
   const text = lines.join("\n");
+  assert.ok(text.includes("60x20"));
   assert.ok(text.includes("80x24"));
-  assert.ok(text.includes("100x30"));
 });
 
 function stubApp(overrides: Partial<App> = {}, size: TerminalSize = { cols: 120, rows: 40 }): App {
@@ -150,7 +150,7 @@ test("frameModel reads terminal size from the IO adapter", () => {
 
 test("frameModel always reports the required size", () => {
   const m = frameModel(stubApp({}, { cols: 200, rows: 60 }));
-  assert.deepEqual(m.requiredSize, { cols: 100, rows: 30 });
+  assert.deepEqual(m.requiredSize, { cols: 80, rows: 24 });
 });
 
 test("frameModel carries the socket path", () => {

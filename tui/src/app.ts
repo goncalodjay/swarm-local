@@ -9,7 +9,7 @@ import { notifyBlocked, notifyFinished } from "./sound.ts";
 
 const log = child("app");
 
-export const REQUIRED_SIZE: TerminalSize = { cols: 100, rows: 30 };
+export const REQUIRED_SIZE: TerminalSize = { cols: 80, rows: 24 };
 
 const FOCUS_ORDER: FocusTarget[] = ["agents", "detail", "menu"];
 

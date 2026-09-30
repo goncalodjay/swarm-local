@@ -1,0 +1,32 @@
+# Shared Memory Rules (Engram)
+
+## Availability
+- `engram` is a required tool; `./swarm` refuses to start without it.
+- `ENGRAM_PROJECT` is exported for you at launch and is identical across every role and worktree in this swarm.
+- Pass `--project "$ENGRAM_PROJECT"` on every `engram` call, with no exceptions. The env var alone does not scope reads or writes to your project; omitting the flag on `save` creates an orphaned memory with no project, and omitting it on `search`/`context` returns memories from every project mixed together. Never pass a different project value and never rely on cwd-based project detection.
+
+## Orientation (start of every task)
+- Run `engram search "<terms>" --project "$ENGRAM_PROJECT"` for the topic you are about to work on before exploring the repository or asking the user anything that may already be answered. Treat results as previews; use `engram timeline <id> --project "$ENGRAM_PROJECT"` or open the observation for the full text before relying on it.
+- `engram context --project "$ENGRAM_PROJECT"` can surface recent session activity for the project; treat an empty result as inconclusive and confirm with `engram search` before assuming nothing is known.
+
+## Bootstrapping a new project
+- `engram search "" --project "$ENGRAM_PROJECT"` (or any broad term for the feature area) returning nothing means this project has no shared memory yet.
+- Bootstrapping is the specifier's job, once, after the first spec is approved: save an overview memory with `engram save "Project overview" "<what/why/stack/conventions>" --type architecture --topic architecture/overview --project "$ENGRAM_PROJECT"`. That save is what creates the project inside Engram; every other role finds it afterward through `ENGRAM_PROJECT`.
+- Coder, reviewer, and architect never create the bootstrap memory. If none exists yet when you start, proceed with the task anyway; the specifier seeds it on its next turn.
+
+## Saving (mandatory after significant work)
+- Save immediately after: a completed bug fix, an architecture/design decision, a non-obvious discovery, a configuration change, a new convention, or a durable user constraint.
+- `engram save "<verb + what>" "<content>" --type <bugfix|decision|architecture|discovery|pattern|config|preference> --project "$ENGRAM_PROJECT"`
+- Content format:
+  ```
+  **What**: one sentence
+  **Why**: what motivated it
+  **Where**: files/paths affected
+  **Learned**: gotchas or surprises, omit if none
+  ```
+- Give evolving topics (architecture, long-running features, conventions) a stable `--topic family/description` (e.g. `architecture/auth-model`, `pattern/error-handling`) so later saves update the same memory instead of creating duplicates. One-off bugs or facts do not need a topic.
+- Do not save raw tool output, transcripts, or routine status. Engram is curated memory, not a log.
+
+## Handoffs
+- The shared project is how the next role finds this memory; never put memory content inside handoff headers or bodies (drafts are headers-only, see Handoff Rules).
+- Before handing off, run `engram save ... --project "$ENGRAM_PROJECT"` for anything the next role needs that is not already obvious from the spec, the code, or git history.

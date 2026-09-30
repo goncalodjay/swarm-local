@@ -23,18 +23,18 @@ Scenario Outline: swarm-tui-resilience 3: terminal too small
   Given a running swarm with the configured roles
   And the terminal size is <cols> columns by <rows> rows
   When the TUI renders
-  Then a terminal-too-small screen shows the current size <cols>x<rows> and the required size 100x30
+  Then a terminal-too-small screen shows the current size <cols>x<rows> and the required size 80x24
 
 Examples:
   | cols | rows |
-  | 80   | 24   |
-  | 99   | 30   |
-  | 100  | 29   |
+  | 60   | 20   |
+  | 79   | 24   |
+  | 80   | 23   |
 
 # swarm-tui-resilience 4: resizing to a valid size restores the dashboard
 Scenario: swarm-tui-resilience 4: resizing to a valid size restores the dashboard
   Given a running swarm with the configured roles
-  And the terminal size is 80 columns by 24 rows
+  And the terminal size is 60 columns by 20 rows
   And the TUI shows the terminal-too-small screen
   When the terminal is resized to 120 columns by 40 rows
   Then the TUI renders the dashboard

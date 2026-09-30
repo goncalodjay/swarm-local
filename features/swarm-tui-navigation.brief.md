@@ -103,7 +103,7 @@ intelligence in the footer, and graceful handling of unknown keys.
 - Respect `NO_COLOR` and work in 16-color mode.
 - Must not capture `Ctrl+Tab`, `Ctrl+Shift+Tab`, or `Ctrl+b`.
 - Must work inside tmux / zellij and over SSH.
-- Minimum terminal size remains 100x30; the too-small screen still applies.
+- Minimum terminal size remains 80x24; the too-small screen still applies.
 
 ## Non-goals (F2)
 

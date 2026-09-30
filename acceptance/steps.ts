@@ -652,11 +652,11 @@ export function createHandlers(): Handler[] {
   });
 
   handlers.push({
-    pattern: /^a terminal-too-small screen shows the current size (\d+)x(\d+) and the required size 100x30$/,
+    pattern: /^a terminal-too-small screen shows the current size (\d+)x(\d+) and the required size 80x24$/,
     run: async (world, _step, _example, [cols, rows]) => {
       assert.equal(world.app.view, "too-small");
       assert.ok(world.rendered.includes(`${cols}x${rows}`));
-      assert.ok(world.rendered.includes("100x30"));
+      assert.ok(world.rendered.includes("80x24"));
     },
   });
 

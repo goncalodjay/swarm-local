@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .ansi import RED, RESET
 
-VALID_AGENTS = {"claude", "codex", "copilot", "grok", "opencode", "pi"}
+VALID_AGENTS = {"claude", "codex", "copilot", "grok", "hermes", "opencode", "pi"}
 VALID_RECEIVE_MODES = {"task", "batch"}
 MASTER_WORKTREES = {"none", "master"}
 
@@ -23,6 +23,8 @@ class RoleRow:
     worktree_path: Path
     receive_mode: str
     extra_args: str
+    workspace_id: str = ""
+    pane_id: str = ""
 
 
 def fail(message):

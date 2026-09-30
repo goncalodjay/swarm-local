@@ -129,7 +129,7 @@ test("checkSocket returns to the dashboard when the socket recovers", () => {
 
 test("start with small terminal shows too-small view", () => {
   const io = new FakeIO();
-  io.size = { cols: 80, rows: 24 };
+  io.size = { cols: 60, rows: 20 };
   const app = new App(io);
   app.start();
   assert.equal(app.view, "too-small");
@@ -355,7 +355,7 @@ test("poll detects lost socket while running", () => {
 
 test("poll recovers to dashboard when size becomes valid", () => {
   const io = new FakeIO();
-  io.size = { cols: 80, rows: 24 };
+  io.size = { cols: 60, rows: 20 };
   const app = new App(io);
   app.start();
   assert.equal(app.view, "too-small");

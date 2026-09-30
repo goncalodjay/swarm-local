@@ -6,4 +6,4 @@ __pycache__/
 *.pyc
 node_modules/
 # Scratch project used to exercise swarm-init end to end.
-test/
+/test/

@@ -4,9 +4,14 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: swarm-init [--languages "Go, Python"] [project-directory]
+       swarm-init --update [project-directory]
 
 Installs the local SwarmForge template into a project. No network request,
 git clone, package installation, or update check is performed.
+
+--update refreshes an existing installation's code (swarmforge/scripts, the
+swarm launcher, the TUI binary, and the toolchain) from this template and
+keeps swarmforge.conf, the constitution, and the roles untouched.
 EOF
 }
 
@@ -21,6 +26,7 @@ TEMPLATE_DIR="$SCRIPT_DIR/template"
 PROVIDER_MODELS_FILE="$SCRIPT_DIR/provider-models.tsv"
 LANGUAGES=""
 TARGET=""
+UPDATE=0
 ROLES=(specifier coder reviewer architect)
 WORKTREES=(master coder reviewer architect)
 declare -A ROLE_AGENTS ROLE_PROVIDERS ROLE_MODEL_IDS ROLE_MODEL_LABELS ROLE_THINKING
@@ -44,6 +50,10 @@ while (($#)); do
     }
     LANGUAGES="$2"
     shift 2
+    ;;
+  --update | -u)
+    UPDATE=1
+    shift
     ;;
   --help | -h)
     usage
@@ -100,6 +110,65 @@ header() {
   mprintf '%s%sSwarmForge local — configuración del backend%s\n' "$BOLD" "$REVERSE" "$RESET"
   mprintf '%s%s%s\n\n' "$DIM" "$1" "$RESET"
 }
+
+# fill_languages <dir>: replace every {{LANGUAGES}} placeholder below <dir>.
+fill_languages() {
+  LANGUAGES="$LANGUAGES" python3 - "$1" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+placeholder = "{{LANGUAGES}}"
+replacements = 0
+for path in root.rglob("*"):
+    if not path.is_file():
+        continue
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        # Binary or unreadable files cannot carry the placeholder.
+        continue
+    count = text.count(placeholder)
+    if count:
+        path.write_text(text.replace(placeholder, os.environ["LANGUAGES"]))
+        replacements += count
+if replacements == 0:
+    raise SystemExit(f"No {placeholder} placeholder found below {root}")
+PY
+}
+
+TUI_BUNDLE_SOURCE="$SCRIPT_DIR/tui/dist/swarm-tui"
+TUI_INSTALL_REL=".swarmforge/tui/swarm-tui"
+
+if ((UPDATE)); then
+  [[ -f "$TARGET/swarmforge/swarmforge.conf" ]] || {
+    echo "No se actualizó: $TARGET no tiene una instalación de SwarmForge." >&2
+    exit 1
+  }
+  if [[ -z "$LANGUAGES" ]]; then
+    LANGUAGES="$(sed -n 's/^- Project languages: \(.*\)\.$/\1/p' \
+      "$TARGET/swarmforge/constitution/articles/project.prompt" 2>/dev/null | head -n 1)"
+  fi
+  [[ -n "$LANGUAGES" ]] || {
+    echo "No se pudieron detectar los lenguajes; pásalos con --languages." >&2
+    exit 2
+  }
+  rm -rf "$TARGET/swarmforge/scripts"
+  cp -R "$TEMPLATE_DIR/swarmforge/scripts" "$TARGET/swarmforge/scripts"
+  find "$TARGET/swarmforge/scripts" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  fill_languages "$TARGET/swarmforge/scripts"
+  install -m 0755 "$TEMPLATE_DIR/swarm" "$TARGET/swarm"
+  mkdir -p "$TARGET/.swarmforge"
+  rm -rf "$TARGET/.swarmforge/toolchain"
+  cp -R "$TEMPLATE_DIR/toolchain" "$TARGET/.swarmforge/toolchain"
+  if [[ -f "$TUI_BUNDLE_SOURCE" ]]; then
+    mkdir -p "$(dirname "$TARGET/$TUI_INSTALL_REL")"
+    install -m 0755 "$TUI_BUNDLE_SOURCE" "$TARGET/$TUI_INSTALL_REL"
+  fi
+  mprintf 'SwarmForge actualizado en %s (swarmforge.conf y constitución sin cambios).\n' "$TARGET"
+  exit 0
+fi
 
 if [[ -z "$LANGUAGES" ]]; then
   header ""
@@ -325,6 +394,7 @@ for path in swarm swarmforge; do
   if [[ -e "$TARGET/$path" ]]; then
     echo "No se instaló: $TARGET/$path ya existe." >&2
     echo "No se sobrescriben configuraciones existentes." >&2
+    echo "Para actualizar solo el código usa: swarm-init --update $TARGET" >&2
     exit 1
   fi
 done
@@ -352,8 +422,6 @@ install_tui_bundle() {
   echo "Installed TUI bundle at $target"
 }
 
-TUI_BUNDLE_SOURCE="$SCRIPT_DIR/tui/dist/swarm-tui"
-TUI_INSTALL_REL=".swarmforge/tui/swarm-tui"
 if [[ ! -f "$TUI_BUNDLE_SOURCE" ]]; then
   echo "No se instaló: no se encontró el binario del TUI en $TUI_BUNDLE_SOURCE." >&2
   echo "Compílalo una vez con: (cd tui && npm install && npm run build)" >&2
@@ -427,29 +495,7 @@ EOF
 mkdir -p "$TARGET/.swarmforge"
 cp -R "$TEMPLATE_DIR/toolchain" "$TARGET/.swarmforge/toolchain"
 
-LANGUAGES="$LANGUAGES" python3 - "$TARGET/swarmforge" <<'PY'
-import os
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-placeholder = "{{LANGUAGES}}"
-replacements = 0
-for path in root.rglob("*"):
-    if not path.is_file():
-        continue
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        # Binary or unreadable files cannot carry the placeholder.
-        continue
-    count = text.count(placeholder)
-    if count:
-        path.write_text(text.replace(placeholder, os.environ["LANGUAGES"]))
-        replacements += count
-if replacements == 0:
-    raise SystemExit(f"No {placeholder} placeholder found below {root}")
-PY
+fill_languages "$TARGET/swarmforge"
 
 ignore_file="$TARGET/.gitignore"
 touch "$ignore_file"
