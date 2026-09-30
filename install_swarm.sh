@@ -9,7 +9,8 @@
 #      release, verifies its sha256, and stages it where swarm-init can find it.
 #   3. If the download fails (or no release is published yet for this triple),
 #      falls back to building the TUI locally with Bun (still requires Node).
-#   4. Runs ./swarm-init on the requested target directory.
+#   4. Runs ./swarm-init on the requested target directory, or
+#      ./swarm-init --update when it already holds an install.
 #
 # Usage:
 #   ./install_swarm.sh                     # install into the current dir
@@ -18,13 +19,14 @@
 #   SWARM_RELEASE_REPO=owner/swarm-local ./install_swarm.sh
 #
 # Required on the destination: bash, curl, tar (for tarball fallback), python3,
-# tmux, git, plus the agent CLIs you plan to use (opencode, codex, claude,
-# hermes, copilot, grok, pi). Node and Bun are only required when the release
-# does not provide a binary for this platform and the script has to build it.
+# herdr, engram, git, plus the agent CLIs you plan to use (opencode, codex, claude,
+# hermes, copilot, grok, pi). Node is only required when the release does not
+# provide a binary for this platform and the script has to build it; Bun is
+# installed automatically in that case if it is missing.
 
 set -euo pipefail
 
-RELEASE_REPO="${SWARM_RELEASE_REPO:-nousresearch/swarm-local}"
+RELEASE_REPO="${SWARM_RELEASE_REPO:-goncalodjay/swarm-local}"
 RELEASE_TAG="${SWARM_RELEASE_TAG:-latest}"
 TARGET_DIR="${1:-$PWD}"
 
@@ -59,7 +61,7 @@ detect_platform() {
 
 require_basic_tools() {
   local missing=()
-  for tool in bash curl python3 tmux git; do
+  for tool in bash curl python3 herdr engram git; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
   if ((${#missing[@]} > 0)); then
@@ -99,6 +101,24 @@ fetch_release_bundle() {
   install -m 0755 "$TMPDIR/$asset_name" "$LOCAL_BUNDLE"
 }
 
+install_bun() {
+  mprintf 'Bun not found; installing it from https://bun.sh …\n'
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      powershell -NoProfile -ExecutionPolicy Bypass -c "irm bun.sh/install.ps1 | iex" \
+        || err "Bun install failed. Install it manually from https://bun.sh/ and retry."
+      ;;
+    *)
+      curl -fsSL https://bun.sh/install | bash \
+        || err "Bun install failed. Install it manually from https://bun.sh/ and retry."
+      ;;
+  esac
+  export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+  export PATH="$BUN_INSTALL/bin:$PATH"
+  command -v bun >/dev/null 2>&1 || err "Bun was installed but is not on PATH (looked in $BUN_INSTALL/bin)."
+  mprintf 'Bun %s ready.\n' "$(bun --version)"
+}
+
 build_bundle_locally() {
   if [[ -x "$LOCAL_BUNDLE" ]]; then
     mprintf 'Reusing existing TUI bundle at %s\n' "$LOCAL_BUNDLE"
@@ -106,7 +126,7 @@ build_bundle_locally() {
   fi
   mprintf '\nNo release bundle for this platform; building TUI from source.\n'
   command -v node >/dev/null 2>&1 || err "Node is required to build the TUI (https://nodejs.org/)."
-  command -v bun >/dev/null 2>&1 || err "Bun is required to build the TUI (https://bun.sh/)."
+  command -v bun >/dev/null 2>&1 || install_bun
   (cd "$SCRIPT_DIR/tui" && npm install --no-audit --no-fund && npm run build)
 }
 
@@ -196,6 +216,14 @@ if ((!TUI_OK)); then
 fi
 
 [[ -x "$LOCAL_BUNDLE" ]] || err "TUI bundle missing or not executable at $LOCAL_BUNDLE."
+
+# An existing install only gets its code refreshed; its swarmforge.conf and
+# constitution are kept. Without this, an old install keeps running stale
+# scripts (e.g. still requiring tmux after the herdr migration).
+if [[ -f "$TARGET_DIR/swarmforge/swarmforge.conf" ]]; then
+  mprintf '\nExisting install found; updating %s …\n' "$TARGET_DIR"
+  exec "$SCRIPT_DIR/swarm-init" --update "$TARGET_DIR"
+fi
 
 mprintf '\nRunning swarm-init on %s …\n' "$TARGET_DIR"
 exec "$SCRIPT_DIR/swarm-init" "$TARGET_DIR"
