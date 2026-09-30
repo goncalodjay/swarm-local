@@ -17,7 +17,7 @@ import type { AgentState, FocusTarget, HandoffInfo, Mode, Role, Status, Terminal
 export const PANEL_WIDTH = 30;
 
 export interface FrameModel {
-  view: "dashboard" | "error" | "too-small";
+  view: "dashboard" | "error" | "too-small" | "starting" | "stopping";
   roles: Role[];
   agents: AgentState[];
   selection: number;
@@ -41,7 +41,7 @@ export function frameModel(app: App): FrameModel {
     if (agent.herdrStatus !== null) herdrMatched += 1;
   }
   return {
-    view: app.view === "attached" ? "dashboard" : app.view,
+    view: frameView(app),
     roles: app.roles,
     agents: app.agents,
     selection: app.selection,
@@ -58,6 +58,36 @@ export function frameModel(app: App): FrameModel {
     herdrMatched,
     herdrTotal: app.roles.length,
   };
+}
+
+function frameView(app: App): FrameModel["view"] {
+  if (app.stopping) return "stopping";
+  if (app.view === "error" || app.view === "too-small") return app.view;
+  if (app.starting) return "starting";
+  return "dashboard";
+}
+
+export function renderStarting(agents: AgentState[]): string[] {
+  const first = agents[0];
+  const who = first ? first.displayName : "the first role";
+  const state =
+    first?.lifecycle === "running" ? `${who} is loading its instructions`
+    : `waiting for ${who} to start`;
+  return [
+    "Starting swarm",
+    "",
+    `${state}…`,
+    "Agents open as soon as it is ready.",
+    "Press q to quit and stop the swarm.",
+  ];
+}
+
+export function renderStopping(): string[] {
+  return [
+    "Stopping swarm",
+    "",
+    "Stopping every agent and the swarm's herdr session…",
+  ];
 }
 
 export function markerGlyph(marker: AgentState["marker"]): string {

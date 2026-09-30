@@ -61,6 +61,10 @@ export class TestIO implements TuiIO {
     return readHandoffSnapshot(path.join(role.worktreePath, ".swarmforge", "handoffs"));
   }
 
+  stopSwarm(): Promise<void> {
+    return Promise.resolve();
+  }
+
   readLifecycles(): Record<string, Lifecycle> {
     const file = path.join(this.world.root, ".swarmforge", "agents.json");
     return existsSync(file) ? parseLifecycles(readFileSync(file, "utf8")) : {};

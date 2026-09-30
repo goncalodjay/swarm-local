@@ -292,6 +292,27 @@ export class FileSystemTuiIO implements TuiIO {
     return queryHerdrAgentsImpl();
   }
 
+  stopSwarm(): Promise<void> {
+    return new Promise((resolve) => {
+      let proc: ChildProcess;
+      try {
+        proc = spawn("bash", stopSwarmArgs(this.root), { stdio: "ignore" });
+      } catch (err) {
+        log.error({ event: "swarm_stop_spawn_failed", err: errMessage(err) }, "cannot run swarm stop");
+        resolve();
+        return;
+      }
+      proc.on("error", (err) => {
+        log.error({ event: "swarm_stop_error", err: errMessage(err) }, "swarm stop failed");
+        resolve();
+      });
+      proc.on("exit", (code) => {
+        log.info({ event: "swarm_stopped", code }, "swarm stop finished");
+        resolve();
+      });
+    });
+  }
+
   log(event: string, fields: Record<string, string | number | boolean | null>): void {
     appendLogEntry(logPathForRoot(this.root), event, fields);
   }
@@ -314,6 +335,23 @@ export class FileSystemTuiIO implements TuiIO {
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+/** `bash <root>/swarm stop`: the project's launcher tears the swarm down. */
+export function stopSwarmArgs(root: string): string[] {
+  return [path.join(root, "swarm"), "stop"];
+}
+
+/**
+ * Synchronous variant for signal handlers (terminal closed, SIGTERM), where
+ * the process is about to die and cannot wait on a callback.
+ */
+export function stopSwarmSync(root: string): void {
+  try {
+    spawnSync("bash", stopSwarmArgs(root), { stdio: "ignore", timeout: 60_000 });
+  } catch (err) {
+    log.error({ event: "swarm_stop_sync_failed", err: errMessage(err) }, "cannot run swarm stop");
+  }
+}
+
 export const NESTED_HERDR_HINT =
   "herdr refuses to open inside herdr: set allow_nested = true under [experimental] " +
   "in ~/.config/herdr/config.toml, or run the TUI from a plain terminal";

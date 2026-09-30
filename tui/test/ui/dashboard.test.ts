@@ -81,6 +81,18 @@ test("error view reports the swarm as unavailable", async () => {
   assert.ok(frame.includes("socket"));
 });
 
+test("starting view explains the wait and how to quit", async () => {
+  const frame = await frameOf(model("starting", [agent(roles[0], "blank", null)], 0));
+  assert.ok(frame.includes("Starting swarm"));
+  assert.ok(frame.includes("Specifier"));
+  assert.ok(frame.includes("Press q to quit and stop the swarm."));
+});
+
+test("stopping view says the swarm is being stopped", async () => {
+  const frame = await frameOf(model("stopping", [], 0));
+  assert.ok(frame.includes("Stopping swarm"));
+});
+
 test("too-small view reports current and required sizes", async () => {
   const frame = await frameOf(
     model("too-small", [], 0, { terminalSize: { cols: 60, rows: 20 } }),

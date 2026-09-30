@@ -11,6 +11,18 @@ const log = child("app");
 
 export const REQUIRED_SIZE: TerminalSize = { cols: 80, rows: 24 };
 
+/**
+ * herdr states in which the first role's agent is ready for the user: idle
+ * at its prompt, done, or blocked on a question to the human.
+ */
+const READY_HERDR_STATUSES = new Set(["idle", "done", "blocked"]);
+
+/**
+ * Open the dashboard anyway this long after the first role started running,
+ * in case herdr cannot detect that backend's state at all.
+ */
+export const STARTUP_TIMEOUT_MS = 120_000;
+
 const FOCUS_ORDER: FocusTarget[] = ["agents", "detail", "menu"];
 
 export interface TuiIO {
@@ -27,6 +39,8 @@ export interface TuiIO {
   log(event: string, fields: Record<string, string | number | boolean | null>): void;
   restore(): void;
   quit(): void;
+  /** Stop every agent, the scheduler and the swarm's herdr session. */
+  stopSwarm(): Promise<void>;
 }
 
 export class App {
@@ -41,7 +55,17 @@ export class App {
   hint: string | null = null;
   attachError: string | null = null;
   helpOpen = false;
+  /**
+   * The swarm is still coming up: nothing but quit is allowed until the
+   * first role's agent is running and ready, so the user cannot attach to
+   * or type into a half-started swarm. Cleared once, never set again.
+   */
+  starting = true;
+  /** Quit was requested and the swarm is being torn down. */
+  stopping = false;
+  now: () => number = () => Date.now();
   io: TuiIO;
+  private firstRoleRunningSince: number | null = null;
   private lastSocketAvailable: boolean | null = null;
   private lastView: AppView = "dashboard";
   private lastHerdrStatus: Map<string, HerdrStatus> = new Map();
@@ -73,6 +97,12 @@ export class App {
 
   refreshAgents(): void {
     const lifecycles = this.io.readLifecycles();
+    this.refreshAgentStates(lifecycles);
+    this.updateStarting(lifecycles);
+    this.detectHerdrTransitions();
+  }
+
+  private refreshAgentStates(lifecycles: Record<string, Lifecycle>): void {
     this.agents = this.roles.map((role) => {
       const snapshot = this.io.readSnapshot(role);
       const herdrAgent = findAgentForCwd(this.herdrAgents, role.worktreePath);
@@ -84,7 +114,32 @@ export class App {
         lifecycles[role.role] ?? null,
       );
     });
-    this.detectHerdrTransitions();
+  }
+
+  private updateStarting(lifecycles: Record<string, Lifecycle>): void {
+    if (!this.starting) return;
+    const first = this.agents[0];
+    // Only the first role's startup is waited on. Once it has run (parked
+    // after forwarding work, or failed) the swarm is past startup, e.g. when
+    // `./swarm tui` reattaches in the middle of a feature.
+    let ready: boolean;
+    if (Object.keys(lifecycles).length === 0 || !first || first.lifecycle === null) {
+      ready = true; // a swarm without the scheduler has nothing to wait for
+    } else if (first.lifecycle === "starting") {
+      ready = false;
+    } else if (first.lifecycle === "running") {
+      this.firstRoleRunningSince ??= this.now();
+      ready =
+        READY_HERDR_STATUSES.has(first.herdrStatus ?? "") ||
+        this.now() - this.firstRoleRunningSince >= STARTUP_TIMEOUT_MS;
+    } else {
+      ready = true; // parked or failed: already past startup
+    }
+    if (ready) {
+      this.starting = false;
+      this.io.log("swarm_ready", { role: first?.role ?? null, herdr: first?.herdrStatus ?? null });
+      log.info({ event: "swarm_ready" }, "swarm ready");
+    }
   }
 
   private detectHerdrTransitions(): void {
@@ -135,6 +190,7 @@ export class App {
   }
 
   poll(): void {
+    if (this.stopping) return;
     void this.refreshHerdrAndAgents();
     this.checkSocket();
     this.checkSize();
@@ -151,8 +207,14 @@ export class App {
   }
 
   async press(key: Key): Promise<void> {
-    if (this.view === "attached") return;
+    if (this.view === "attached" || this.stopping) return;
     this.hint = null;
+    if (this.starting) {
+      if (key === "quit") await this.quit();
+      else if (key === "ctrl+k") this.mode = "prefix";
+      else if (this.mode === "prefix") this.mode = "normal";
+      return;
+    }
     if (this.helpOpen) {
       if (key === "quit" || key === "esc" || key === "?") this.helpOpen = false;
       return;
@@ -167,7 +229,7 @@ export class App {
           this.helpOpen = true;
           break;
         case "quit":
-          this.quit();
+          await this.quit();
           break;
         default:
           break;
@@ -199,7 +261,7 @@ export class App {
         this.mode = "prefix";
         break;
       case "quit":
-        this.quit();
+        await this.quit();
         break;
       case "esc":
         this.attachError = null;
@@ -299,8 +361,21 @@ export class App {
     this.logViewTransition();
   }
 
-  quit(): void {
-    log.info({ event: "tui_quit" }, "tui quitting");
+  /**
+   * Quitting the TUI ends the swarm: every agent, the scheduler and the
+   * herdr session are stopped so nothing keeps holding memory. Sessions are
+   * kept, so the next `./swarm` resumes them.
+   */
+  async quit(): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
+    log.info({ event: "tui_quit" }, "tui quitting; stopping swarm");
+    this.io.log("swarm_stop", {});
+    try {
+      await this.io.stopSwarm();
+    } catch (err) {
+      log.error({ event: "swarm_stop_failed", err }, "stopping the swarm failed");
+    }
     this.io.restore();
     this.io.quit();
   }
