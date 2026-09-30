@@ -7,13 +7,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import dataclasses
 import os
 import subprocess
-import time
 from dataclasses import replace
 
+from swarm_python import agent_state
 from swarm_python.ansi import BOLD, CYAN, GREEN, RED, RESET, YELLOW
 from swarm_python.config import AGENT_WINDOW, RoleRow, parse_config
 from swarm_python.deps import check_backends, command_exists, require
-from swarm_python.env import env_long
 from swarm_python.git_ops import (
     init_repo_if_missing,
     prepare_handoff_dirs,
@@ -27,7 +26,7 @@ from swarm_python.herdr_ops import (
     workspace_create,
     workspace_list,
 )
-from swarm_python.launch import build_launch_command, send_launch_command, write_launch_script
+from swarm_python.launch import build_launch_command
 from swarm_python.paths import build_context
 from swarm_python.sleep_inhibit import prefix as sleep_inhibit_prefix
 from swarm_python.tsv import write_tsv
@@ -132,16 +131,6 @@ def start_handoff_daemon(ctx):
     print(f"{GREEN}Started handoff daemon{extra}.{RESET}")
 
 
-def launch_role(ctx, index, row: RoleRow):
-    command = build_launch_command(ctx, index, row)
-    script_path = write_launch_script(ctx, row.role, command)
-    send_launch_command(ctx.herdr_session, row.pane_id, script_path)
-    print(
-        f"  {CYAN}[{row.display_name}]{RESET} started in workspace {row.workspace_id} "
-        f"({row.pane_id})"
-    )
-
-
 def create_role_workspaces(ctx, roles):
     # cwd is ctx.working_dir, not the role's worktree: worktrees are created
     # by prepare_worktrees() right after this, and the launch command's own
@@ -200,14 +189,15 @@ def run_main(root: str):
         ctx.roles_file,
         ctx.herdr_session_file,
     )
+    # Only the first role (the specifier) starts now. The handoff daemon
+    # launches every other role when work reaches it and parks it again
+    # once it is idle, so a swarm keeps one agent in memory, not four.
+    agent_state.save(ctx.state_dir, agent_state.initial_state([r.role for r in roles]))
     start_handoff_daemon(ctx)
-
-    print(f"{GREEN}Starting agents...{RESET}")
-    delay = env_long("SWARMFORGE_AGENT_START_DELAY_MS", 1500)
-    for i, r in enumerate(roles):
-        if i > 0:
-            time.sleep(delay / 1000)
-        launch_role(ctx, i, r)
+    print(
+        f"{GREEN}Starting {roles[0].display_name}; the other roles start "
+        f"when work reaches them.{RESET}"
+    )
 
     print()
     print(f"{GREEN}{BOLD}SwarmForge is ready.{RESET}")
@@ -215,6 +205,7 @@ def run_main(root: str):
     print("Workspaces:")
     for r in roles:
         print(f"  {r.display_name}: {r.workspace_id} ({r.pane_id})")
+    print(f"Agent states: {agent_state.state_path(ctx.state_dir)}")
     print()
     print(f"{GREEN}Tip: Write a handoff draft and run swarm_handoff.sh while "
           f"the swarm is running.{RESET}")
@@ -267,10 +258,6 @@ def test_launch_command(root: str, agent: str, extra_args: str = ""):
     print(build_launch_command(ctx, 1, row))
 
 
-def test_agent_start_delay():
-    print(env_long("SWARMFORGE_AGENT_START_DELAY_MS", 1500))
-
-
 def test_sleep_inhibitor_prefix():
     print(" ".join(sleep_inhibit_prefix()))
 
@@ -291,8 +278,6 @@ def main():
     elif cmd == "--test-launch-command":
         root = args[1] if len(args) > 1 else cwd
         test_launch_command(root, args[2], args[3] if len(args) > 3 else "")
-    elif cmd == "--test-agent-start-delay":
-        test_agent_start_delay()
     elif cmd == "--test-sleep-inhibitor-prefix":
         test_sleep_inhibitor_prefix()
     else:
