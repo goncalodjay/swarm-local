@@ -41,7 +41,7 @@ export function model(
     errorMessage: "boom",
     attachError: null,
     terminalSize: { cols: 120, rows: 40 },
-    requiredSize: { cols: 100, rows: 30 },
+    requiredSize: { cols: 80, rows: 24 },
     socket: "/p/.swarmforge/swarm.sock",
     mode: "normal",
     focus: "menu",

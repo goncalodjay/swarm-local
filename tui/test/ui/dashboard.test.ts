@@ -83,10 +83,10 @@ test("error view reports the swarm as unavailable", async () => {
 
 test("too-small view reports current and required sizes", async () => {
   const frame = await frameOf(
-    model("too-small", [], 0, { terminalSize: { cols: 80, rows: 24 } }),
+    model("too-small", [], 0, { terminalSize: { cols: 60, rows: 20 } }),
   );
+  assert.ok(frame.includes("60x20"));
   assert.ok(frame.includes("80x24"));
-  assert.ok(frame.includes("100x30"));
 });
 
 test("frame never scrolls past the terminal height", async () => {
@@ -95,18 +95,18 @@ test("frame never scrolls past the terminal height", async () => {
 });
 
 test("frame renders at the minimum supported terminal size", async () => {
-  const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 100, height: 30 });
+  const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24 });
   const mount = new FrameMount(renderer, darkTheme);
   try {
     mount.update(model("dashboard", agentsForRoles(1, "fix-login"), 1, {
-      terminalSize: { cols: 100, rows: 30 },
+      terminalSize: { cols: 80, rows: 24 },
     }));
     await renderOnce();
     const frame = captureCharFrame();
     assert.ok(frame.includes("Agents"));
     assert.ok(frame.includes("Detail — coder"));
     for (const line of frame.split("\n")) {
-      assert.ok(line.length <= 100, `line overflows 100 columns: ${line.length}`);
+      assert.ok(line.length <= 80, `line overflows 80 columns: ${line.length}`);
     }
   } finally {
     mount.destroy();

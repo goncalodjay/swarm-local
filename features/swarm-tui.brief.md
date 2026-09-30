@@ -80,7 +80,7 @@ reports/logs tabs belong to F4, not F1.
 
 - Swarm not running at startup, or socket lost while running → error screen
   telling the user the swarm is unavailable; no crash.
-- Terminal smaller than 100x30 → "terminal too small" screen showing current
+- Terminal smaller than 80x24 → "terminal too small" screen showing current
   vs required size; recovers automatically on resize.
 - Missing or malformed agent state files → that agent renders with a blank
   status; the TUI does not crash.
@@ -96,7 +96,7 @@ reports/logs tabs belong to F4, not F1.
   type-stripping (no build step required to run).
 - Tests with the built-in `node:test` runner.
 - 1s status polling; rendering must keep up with that cadence.
-- Minimum terminal 100x30; WSL terminal is the first target.
+- Minimum terminal 80x24; WSL terminal is the first target.
 - Keyboard-only input.
 
 ## Non-goals (F1)
