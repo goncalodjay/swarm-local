@@ -71,6 +71,18 @@ Desde la raíz de un proyecto:
 ./swarm
 ```
 
+`./swarm` levanta el swarm y abre la TUI directamente. Mientras el `specifier` arranca, la TUI muestra "Starting swarm" y no deja entrar a ningún agente; se habilita cuando el `specifier` está listo. Solo corre un agente a la vez: los demás roles se lanzan cuando les llega trabajo y se estacionan (`parked`) al quedar libres.
+
+| Comando | Qué hace |
+| --- | --- |
+| `./swarm` | Levanta el swarm y abre la TUI. |
+| `q` o `Ctrl+k q` en la TUI | Cierra la TUI **y detiene todo**: cada agente, el daemon de handoffs y la sesión de herdr del swarm, para liberar memoria. Cerrar la ventana de la terminal hace lo mismo. |
+| `./swarm tui` | Vuelve a abrir la TUI sobre un swarm que ya está corriendo. |
+| `./swarm stop` | Detiene todo sin abrir la TUI. |
+| `./swarm --no-tui` | Levanta el swarm sin abrir la TUI (modo anterior). |
+
+Al volver a correr `./swarm`, cada rol retoma la sesión de su feature en curso (`.swarmforge/agents.json`).
+
 Puedes indicar los lenguajes por adelantado, pero el inicializador siempre consulta la configuración de los cuatro roles:
 
 ```sh
@@ -87,7 +99,7 @@ El inicializador copia `swarm` y `swarmforge/`, sustituye `{{LANGUAGES}}` en la 
 
 ## TUI
 
-El dashboard (`./swarm tui`) está construido sobre [OpenTUI](https://github.com/anomalyco/opentui) y se distribuye como **binario autocontenido**: el usuario final no necesita Node ni Bun para ejecutarlo.
+El dashboard (se abre con `./swarm`; `./swarm tui` lo reabre) está construido sobre [OpenTUI](https://github.com/anomalyco/opentui) y se distribuye como **binario autocontenido**: el usuario final no necesita Node ni Bun para ejecutarlo.
 
 ```sh
 cd tui

@@ -57,8 +57,8 @@ You are the architect.
 - Commit your architectural changes to your worktree branch before any handoff.
 - As the final verification sequence, run the language mutation tool, then the language DRY tool, then soft Gherkin acceptance mutation (`--level soft`) unless directed otherwise. Fix what each tool finds before running the next one.
 - If you need behavior work from the coder (a real bug, a missing test, a behavior change), send a `git_handoff` to the CODER with the feature's task name, one handoff per concrete item. Do not bundle unrelated follow-ups. Then wait: that work returns to you through the reviewer.
-- When the architecture is sound and you have no outstanding follow-up for the coder, send a `git_handoff` to the SPECIFIER with the feature's task name. This is the completion signal that lets the specifier merge your branch, open the PR, mark the feature complete, and start the next approved feature.
-- Send the completion signal even when you made no commits this cycle. Without it, the chain stalls and `swarmforge/approved-specs.txt` is never drained.
+- When the architecture is sound and you have no outstanding follow-up for the coder, send a `git_handoff` to the SPECIFIER with the feature's task name. This is the completion signal that lets the specifier merge your branch, open the PR, and mark the feature complete.
+- Send the completion signal even when you made no commits this cycle. Without it, the chain stalls and the feature is never closed.
 - If you dispatch coder follow-up, do NOT send the completion signal in the same cycle. The feature is not done until that work comes back clean.
 - Run `done_with_current.sh` when the task or batch is fully handled.
 

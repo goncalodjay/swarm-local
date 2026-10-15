@@ -1,4 +1,4 @@
-import type { AgentState, HerdrStatus, HandoffSnapshot, Marker, Role, Status } from "./types.ts";
+import type { AgentState, HerdrStatus, HandoffSnapshot, Lifecycle, Marker, Role, Status } from "./types.ts";
 import { mapHerdrStatusToTui } from "./herdr.ts";
 
 export function computeStatus(snapshot: HandoffSnapshot, herdr: HerdrStatus | null): Status {
@@ -33,6 +33,7 @@ export function agentState(
   snapshot: HandoffSnapshot,
   herdr: HerdrStatus | null = null,
   terminalTitle: string | null = null,
+  lifecycle: Lifecycle | null = null,
 ): AgentState {
   const status = computeStatus(snapshot, herdr);
   return {
@@ -46,7 +47,32 @@ export function agentState(
     handoffs: snapshot,
     herdrStatus: herdr,
     terminalTitle,
+    lifecycle,
   };
+}
+
+/** True when there is an agent process to attach to. */
+export function isAttachable(agent: AgentState): boolean {
+  return agent.lifecycle === null || agent.lifecycle === "running";
+}
+
+export function lifecycleLabel(lifecycle: Lifecycle): string {
+  switch (lifecycle) {
+    case "running":
+      return "running";
+    case "starting":
+      return "starting";
+    case "parked":
+      return "parked";
+    default:
+      return "failed";
+  }
+}
+
+/** Shown when Enter is pressed on a role whose agent is not running. */
+export function unavailableMessage(agent: AgentState): string {
+  const why = agent.lifecycle === null ? "" : ` (${lifecycleLabel(agent.lifecycle)})`;
+  return `${agent.displayName} is not available at the moment${why}`;
 }
 
 export function mapHerdrStatus(herdr: HerdrStatus | null): Status | null {

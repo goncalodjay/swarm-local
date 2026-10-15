@@ -26,7 +26,7 @@ reviewer --contained change--> specifier        (feature complete)
 reviewer --structural change--> architect
 architect --adjustments--> coder                (returns via reviewer)
 architect --architecture sound--> specifier     (feature complete)
-specifier: merge + PR + mark complete + dequeue next approved feature
+specifier: merge + PR + mark complete + wait for user approval of the next feature
 ```
 
 - The specifier sends only to the coder.
@@ -34,7 +34,7 @@ specifier: merge + PR + mark complete + dequeue next approved feature
 - The reviewer sends to the coder for rework, and forward to exactly one of the architect or the specifier when the review passes.
 - The architect sends adjustments to the coder and the completion signal to the specifier.
 - Every role may send work to the coder. Only the specifier closes a feature.
-- A handoff reaching the specifier from the reviewer or the architect means the feature is finished: merge, open the PR, mark it complete, and start the next approved feature automatically.
+- A handoff reaching the specifier from the reviewer or the architect means the feature is finished: merge, open the PR, mark it complete, and wait for the user to approve starting the next feature. Nothing starts the next feature automatically.
 
 ## Specifications
 - One feature request produces exactly one specification document and one Gherkin file. Never split a request into multiple small feature documents because it touches several technologies or layers.

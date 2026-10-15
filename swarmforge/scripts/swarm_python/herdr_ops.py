@@ -83,3 +83,31 @@ def workspace_close(session, workspace_id):
 
 def pane_run(session, pane_id, command):
     _run(session, "pane", "run", pane_id, command)
+
+
+def pane_statuses(session) -> dict:
+    """Map pane_id -> herdr's detected agent_status (idle, working, blocked,
+    done, unknown) for every pane in the session."""
+    payload, _ = _run_json(session, "pane", "list")
+    if not payload or "result" not in payload:
+        return {}
+    return {
+        p["pane_id"]: p.get("agent_status", "unknown")
+        for p in payload["result"].get("panes", [])
+    }
+
+
+def pane_foreground(session, pane_id):
+    """Return (foreground_process_group_id, shell_pid) for a pane, or
+    (None, None) when herdr cannot report it. The two are equal when the
+    pane is back at its own shell prompt, i.e. nothing is running in it."""
+    payload, _ = _run_json(session, "pane", "process-info", "--pane", pane_id)
+    try:
+        info = payload["result"]["process_info"]
+        return info["foreground_process_group_id"], info["shell_pid"]
+    except (TypeError, KeyError):
+        return None, None
+
+
+def pane_send_keys(session, pane_id, *keys):
+    _run(session, "pane", "send-keys", pane_id, *keys)

@@ -63,6 +63,7 @@ You are the specifier.
 
 ## Approved Queue
 - Maintain the queue of approved features at `swarmforge/approved-specs.txt`, one feature base name per line (e.g. `auth`, `search`, `export`). When the user approves a feature, append its base name. When you hand a feature to the coder, remove its line.
+- The queue records what is next; it never starts work by itself. A queued feature goes to the coder only after the user confirms it should start now, even if it was approved earlier.
 
 ## Communication
 - You send work to the coder only. The coder is your only outbound recipient.
@@ -85,7 +86,10 @@ A handoff arriving from the reviewer or the architect means the feature is DONE.
    - Open the pull request from `swarmforge/<task-name>` into the project's base branch, titled with the feature and describing the phases delivered.
    - If the project has no remote or no PR tool available, skip the push and PR, record that in the spec, and report it to the user. Do not treat a missing remote as a failure of the feature.
 5. Record the PR reference in the spec document.
-6. Read `swarmforge/approved-specs.txt`. If it is non-empty, take the first entry, hand it off to the coder with `priority: 00`, and remove that line. If the queue is empty, ask the user for the next feature to specify.
-7. Run `done_with_current.sh` to clear the completion handoff from your `in_process`.
+6. Run `done_with_current.sh` to clear the completion handoff from your `in_process`. If it prints another task, handle that task before continuing.
+7. Report to the user: which feature closed, the PR reference (or why there is none), and what `swarmforge/approved-specs.txt` holds next.
+8. Wait for the user. Do not hand anything to the coder until the user explicitly says to start the next feature:
+   - If the user confirms the first queued feature, hand it to the coder with `priority: 00` and remove its line from the queue.
+   - If the queue is empty or the user wants something else, start discovery for the feature the user names.
 
-The queue advances automatically: a completed feature immediately starts the next approved one without waiting for the user, as long as `swarmforge/approved-specs.txt` is non-empty.
+A completed feature never starts the next one on its own. The rest of the swarm stays stopped while you wait, so waiting costs nothing; starting unapproved work does.

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .config import AGENT_WINDOW, RoleRow
 from .env import shell_quote
+from .sessions import RESUME_PROMPT, SessionPlan
 
 
 def _extra_args_prefix(row: RoleRow) -> str:
@@ -62,7 +63,12 @@ def _write_agent_instruction(role: str, role_worktree: Path, prompt_file: Path):
     prompt_file.write_text("\n\n---\n\n".join(sections) + "\n", encoding="utf-8")
 
 
-def build_launch_command(ctx, index: int, row: RoleRow) -> str:
+def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | None = None) -> str:
+    """Shell command that starts a role's agent in its pane.
+
+    `session` names the backend session (see sessions.py). A fresh session
+    gets the full constitution and role prompt as its first message; a
+    resumed one already has it and only gets the short mail wake-up."""
     role = row.role
     agent = row.agent
     display = row.display_name
@@ -88,12 +94,25 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
     # depend on the shell's PATH inheriting the caller's env.
     agent_bin = shell_quote(shutil.which(agent) or agent)
 
+    resuming = session is not None and session.resume
+    first_message = (
+        shell_quote(RESUME_PROMPT) if resuming
+        else f'"$(cat {shell_quote(str(prompt_file))})"'
+    )
+
     if agent == "claude":
+        if session is None:
+            session_args = ""
+        elif session.resume:
+            session_args = f"--resume {shell_quote(session.session_id)} "
+        else:
+            session_args = f"--session-id {shell_quote(session.session_id)} "
         agent_cmd = (
-            f"{agent_bin} --append-system-prompt-file {shell_quote(str(prompt_file))} "
+            f"{agent_bin} {session_args}"
+            f"--append-system-prompt-file {shell_quote(str(prompt_file))} "
             f"--permission-mode acceptEdits -n {shell_quote(f'SwarmForge {display}')} "
             f"{_extra_args_prefix(row)}"
-            f'"$(cat {shell_quote(str(prompt_file))})"'
+            f"{first_message}"
         )
     elif agent == "codex":
         agent_cmd = (
@@ -122,16 +141,27 @@ def build_launch_command(ctx, index: int, row: RoleRow) -> str:
             f'--prompt "$(cat {shell_quote(str(prompt_file))})"'
         )
     elif agent == "hermes":
+        session_args = (
+            f"--continue {shell_quote(session.session_id)} --create-if-missing "
+            if session is not None else ""
+        )
+        query = (
+            f"-q {first_message}" if resuming
+            else f"--query-file {shell_quote(str(prompt_file))}"
+        )
         agent_cmd = (
             f"{agent_bin} chat --in {shell_quote(str(role_worktree))} "
-            f"{_extra_args_prefix(row)}"
-            f"--query-file {shell_quote(str(prompt_file))}"
+            f"{session_args}{_extra_args_prefix(row)}{query}"
         )
     elif agent == "pi":
+        session_args = (
+            f"--session-id {shell_quote(session.session_id)} "
+            if session is not None else ""
+        )
         agent_cmd = (
             f"{agent_bin} --name {shell_quote(f'SwarmForge {display}')} "
-            f"--no-context-files {_extra_args_prefix(row)}"
-            f'"$(cat {shell_quote(str(prompt_file))})"'
+            f"{session_args}--no-context-files {_extra_args_prefix(row)}"
+            f"{first_message}"
         )
     else:
         agent_cmd = ""
@@ -174,3 +204,10 @@ def send_launch_command(session: str, pane_id: str, script_path: Path):
         # the OS the pane actually runs on, not the string's own syntax.
         invocation = f"& {invocation}"
     pane_run(session, pane_id, invocation)
+
+
+def start_role(ctx, index: int, row: RoleRow, session: SessionPlan | None = None):
+    """Launch a role's agent in its (idle) pane."""
+    command = build_launch_command(ctx, index, row, session)
+    script_path = write_launch_script(ctx, row.role, command)
+    send_launch_command(ctx.herdr_session, row.pane_id, script_path)

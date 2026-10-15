@@ -2,7 +2,7 @@ import "./src/instrumentation.ts";
 import { startActiveObservation } from "@langfuse/tracing";
 import { createCliRenderer, type CliRenderer, type ParsedKey } from "@opentui/core";
 import { App } from "./src/app.ts";
-import { FileSystemTuiIO, projectRoot, setExitHandler, setTerminalControl } from "./src/io.ts";
+import { FileSystemTuiIO, projectRoot, setExitHandler, setTerminalControl, stopSwarmSync } from "./src/io.ts";
 import { keyFromParsed } from "./src/keys.ts";
 import { frameModel } from "./src/render.ts";
 import { selectTheme } from "./src/theme.ts";
@@ -193,9 +193,15 @@ async function runTui(rootSpan: { update: (attrs: Record<string, unknown>) => vo
   // torn down before the process leaves.
   setExitHandler(shutdown);
 
-  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  // Closing the terminal window (SIGHUP) or killing the TUI ends the swarm
+  // just like quitting does, so no agent outlives the TUI holding memory.
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(sig, () => {
-      log.info({ event: "tui_signal", signal: sig }, "tui received shutdown signal");
+      log.info({ event: "tui_signal", signal: sig }, "tui received shutdown signal; stopping swarm");
+      if (!app.stopping) {
+        app.stopping = true;
+        stopSwarmSync(root);
+      }
       shutdown(0);
     });
   }

@@ -24,6 +24,7 @@ export function agent(role: Role, marker: AgentState["marker"], task: string | n
     handoffs: { queued: [], inProcess: [], completed: [], pendingUserNote: marker === "bang" },
     herdrStatus: null,
     terminalTitle: null,
+    lifecycle: null,
   };
 }
 

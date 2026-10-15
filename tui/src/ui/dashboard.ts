@@ -21,6 +21,8 @@ import {
   renderFooter,
   renderLegend,
   renderTooSmall,
+  renderStarting,
+  renderStopping,
   type DetailLine,
   type FrameModel,
 } from "../render.ts";
@@ -292,6 +294,14 @@ export function buildFrame(renderer: CliRenderer, theme: Theme, model: FrameMode
   if (model.view === "error") {
     const [title, , ...rest] = renderError(model.errorMessage);
     return buildNotice(renderer, theme, title ?? "Error", rest, theme.statusError);
+  }
+  if (model.view === "starting") {
+    const [title, , ...rest] = renderStarting(model.agents);
+    return buildNotice(renderer, theme, title ?? "Starting", rest, theme.statusWarning);
+  }
+  if (model.view === "stopping") {
+    const [title, , ...rest] = renderStopping();
+    return buildNotice(renderer, theme, title ?? "Stopping", rest, theme.statusWarning);
   }
   if (model.view === "too-small") {
     const [title, , ...rest] = renderTooSmall(model.terminalSize, model.requiredSize);

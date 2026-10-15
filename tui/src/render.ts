@@ -10,13 +10,14 @@
 
 import { REQUIRED_SIZE, type App } from "./app.ts";
 import { isDisabledMenuItem, MENU_DASHBOARD, menuItems } from "./menu.ts";
+import { lifecycleLabel } from "./status.ts";
 import type { AgentState, FocusTarget, HandoffInfo, Mode, Role, Status, TerminalSize } from "./types.ts";
 
 /** Width of the agents panel, in columns. */
 export const PANEL_WIDTH = 30;
 
 export interface FrameModel {
-  view: "dashboard" | "error" | "too-small";
+  view: "dashboard" | "error" | "too-small" | "starting" | "stopping";
   roles: Role[];
   agents: AgentState[];
   selection: number;
@@ -40,7 +41,7 @@ export function frameModel(app: App): FrameModel {
     if (agent.herdrStatus !== null) herdrMatched += 1;
   }
   return {
-    view: app.view === "attached" ? "dashboard" : app.view,
+    view: frameView(app),
     roles: app.roles,
     agents: app.agents,
     selection: app.selection,
@@ -57,6 +58,36 @@ export function frameModel(app: App): FrameModel {
     herdrMatched,
     herdrTotal: app.roles.length,
   };
+}
+
+function frameView(app: App): FrameModel["view"] {
+  if (app.stopping) return "stopping";
+  if (app.view === "error" || app.view === "too-small") return app.view;
+  if (app.starting) return "starting";
+  return "dashboard";
+}
+
+export function renderStarting(agents: AgentState[]): string[] {
+  const first = agents[0];
+  const who = first ? first.displayName : "the first role";
+  const state =
+    first?.lifecycle === "running" ? `${who} is loading its instructions`
+    : `waiting for ${who} to start`;
+  return [
+    "Starting swarm",
+    "",
+    `${state}…`,
+    "Agents open as soon as it is ready.",
+    "Press q to quit and stop the swarm.",
+  ];
+}
+
+export function renderStopping(): string[] {
+  return [
+    "Stopping swarm",
+    "",
+    "Stopping every agent and the swarm's herdr session…",
+  ];
 }
 
 export function markerGlyph(marker: AgentState["marker"]): string {
@@ -173,7 +204,9 @@ export function renderAgentRow(agent: AgentState, selected: boolean): string {
   const sel = selected ? ">" : " ";
   const glyph = markerGlyph(agent.marker);
   const task = agent.task ?? "";
-  return `${sel} ${glyph} ${agent.role}${task !== "" ? " " + task : ""}`;
+  const lifecycle =
+    agent.lifecycle === null || agent.lifecycle === "running" ? "" : ` (${lifecycleLabel(agent.lifecycle)})`;
+  return `${sel} ${glyph} ${agent.role}${lifecycle}${task !== "" ? " " + task : ""}`;
 }
 
 export function renderAgentsPanel(agents: AgentState[], selection: number): string[] {
@@ -192,7 +225,10 @@ export function detailLines(agent: AgentState | null): DetailLine[] {
   const lines: DetailLine[] = [];
   lines.push({ text: `Task: ${agent.task ?? "—"}`, tone: "default" });
   lines.push({ text: `State: ${statusLabel(agent.status)}`, tone: "status", status: agent.status });
-  if (agent.herdrStatus !== null) {
+  if (agent.lifecycle !== null) lines.push(lifecycleLine(agent.lifecycle));
+  if (agent.lifecycle !== null && agent.lifecycle !== "running") {
+    // No process, so herdr has nothing to detect; don't report that as a fault.
+  } else if (agent.herdrStatus !== null) {
     lines.push({ text: `Herdr: ${agent.herdrStatus}`, tone: "default" });
   } else {
     lines.push({ text: "Herdr: not detected (no agent in this worktree)", tone: "muted" });
@@ -218,6 +254,19 @@ export function detailLines(agent: AgentState | null): DetailLine[] {
     }
   }
   return lines;
+}
+
+function lifecycleLine(lifecycle: NonNullable<AgentState["lifecycle"]>): DetailLine {
+  switch (lifecycle) {
+    case "running":
+      return { text: "Agent: running", tone: "default" };
+    case "starting":
+      return { text: "Agent: starting", tone: "muted" };
+    case "parked":
+      return { text: "Agent: parked — starts when work reaches it", tone: "muted" };
+    default:
+      return { text: "Agent: failed — kept exiting at launch; restart the swarm", tone: "muted" };
+  }
 }
 
 /** Title of the detail panel for the selected agent. */
