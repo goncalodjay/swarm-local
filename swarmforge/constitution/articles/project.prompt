@@ -22,19 +22,18 @@ The swarm runs as one cycle per feature, not as a chain of small round trips.
 specifier --whole phased spec--> coder
 coder --every change--> reviewer
 reviewer --rework--> coder
-reviewer --contained change--> specifier        (feature complete)
-reviewer --structural change--> architect
+reviewer --review passed--> architect           (always)
 architect --adjustments--> coder                (returns via reviewer)
 architect --architecture sound--> specifier     (feature complete)
-specifier: merge + PR + mark complete + wait for user approval of the next feature
+specifier: merge into working branch, NO commit/push, wait for user review
 ```
 
 - The specifier sends only to the coder.
 - The coder sends only to the reviewer, whoever sent it the work.
-- The reviewer sends to the coder for rework, and forward to exactly one of the architect or the specifier when the review passes.
+- The reviewer sends to the coder for rework, and forward to the architect, always, when the review passes.
 - The architect sends adjustments to the coder and the completion signal to the specifier.
 - Every role may send work to the coder. Only the specifier closes a feature.
-- A handoff reaching the specifier from the reviewer or the architect means the feature is finished: merge, open the PR, mark it complete, and wait for the user to approve starting the next feature. Nothing starts the next feature automatically.
+- A handoff reaching the specifier from the reviewer or the architect means the feature is finished: merge into the working branch and stop, leaving changes uncommitted for the user to review. Commit, push and PR only after the user approves. Nothing starts the next feature automatically.
 
 ## Specifications
 - One feature request produces exactly one specification document and one Gherkin file. Never split a request into multiple small feature documents because it touches several technologies or layers.

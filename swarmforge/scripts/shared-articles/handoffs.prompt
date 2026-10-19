@@ -27,15 +27,16 @@ The swarm is a cycle. Each role has a fixed set of allowed recipients:
 | --------- | ------------------------------------------- |
 | specifier | coder                                       |
 | coder     | reviewer                                    |
-| reviewer  | coder, and one of architect or specifier    |
+| reviewer  | coder, architect                            |
 | architect | coder, specifier                            |
 
 - Every role may send work to the coder. The coder answers only to the reviewer.
-- The reviewer picks exactly one forward recipient when its review passes:
-  the architect for structurally large changes, the specifier otherwise.
-- A handoff reaching the specifier from the reviewer or the architect means the
-  feature is complete. The specifier merges, opens the PR, marks the feature
-  done, and waits for the user to approve starting the next feature.
+- When its review passes, the reviewer ALWAYS forwards to the architect, never
+  directly to the specifier, however small the change and including re-reviews
+  after rework.
+- A handoff reaching the specifier from the architect means the feature is
+  complete. The specifier merges into the working branch, leaves the result
+  uncommitted for the user to review, and waits for the user's go-ahead.
 - Never send to a recipient outside your row. A misrouted handoff stalls the
   cycle because the specifier never receives its completion signal.
 - Always forward after completing an inbound task, regardless of what changed.

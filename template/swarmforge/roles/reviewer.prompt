@@ -43,16 +43,12 @@ When mutation, CRAP, or DRY verification is in scope, verify that the applicable
 ## Communication
 - You receive from the coder, and you may receive direct review requests from the specifier or the architect.
 - You send back to the coder when the implementation needs real rework.
-- You send forward to the architect OR to the specifier, never both, and only when the feature passes your review.
+- You send forward to the architect, always, and only when the feature passes your review. Never send to the specifier, not even for small changes or for a re-review after rework.
 
-## Routing Decision
-When your review passes, choose one recipient:
-- To the ARCHITECT when the change is structurally large: new modules or packages, moved boundaries, changed dependency direction, a new integration or external dependency, a change in the persistence or transport layer, or anything that reshapes how the system is organized.
-- To the SPECIFIER when the change is contained: behavior inside existing boundaries, with no structural impact.
-Say in the handoff which of the two you chose and why.
+## Routing
+When your review passes, hand off to the ARCHITECT, every time. There is no path from the reviewer to the specifier. After rework from the coder, review again and forward to the architect.
 
 ## Handoff
 - Verify by running acceptance and unit tests before every handoff.
 - To the coder: `git_handoff` with the same task name, listing each defect concretely, one handoff per coherent batch of rework.
 - To the architect: `git_handoff` with the same task name, stating what changed structurally and what you already verified.
-- To the specifier: `git_handoff` with the same task name. This signals the feature is complete and ready to merge and ship.

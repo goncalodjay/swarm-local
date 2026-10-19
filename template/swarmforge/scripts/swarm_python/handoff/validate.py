@@ -34,19 +34,18 @@ USAGE = USAGE_TEXT
 # specifier -> coder            (whole phased spec)
 # coder     -> reviewer         (every change, whoever sent the work)
 # reviewer  -> coder            (rework)
-#           -> architect | specifier (exactly one, when the review passes)
+#           -> architect        (always, when the review passes)
 # architect -> coder            (adjustments)
 #           -> specifier        (feature complete)
 ROLE_ROUTES = {
     "specifier": frozenset({"coder"}),
     "coder": frozenset({"reviewer"}),
-    "reviewer": frozenset({"coder", "architect", "specifier"}),
+    "reviewer": frozenset({"coder", "architect"}),
     "architect": frozenset({"coder", "specifier"}),
 }
 
-# Recipients a single reviewer handoff may never combine: a passing review goes
-# forward to exactly one of them.
-EXCLUSIVE_FORWARDS = {"reviewer": frozenset({"architect", "specifier"})}
+# Recipients a single handoff may never combine; none in the current cycle.
+EXCLUSIVE_FORWARDS = {}
 
 KNOWN_CYCLE_ROLES = frozenset(ROLE_ROUTES)
 
