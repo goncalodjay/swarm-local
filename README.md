@@ -152,16 +152,15 @@ El swarm trabaja por ciclos completos de feature, no por idas y vueltas pequeña
 specifier --spec único y por fases--> coder
 coder     --cada cambio-------------> reviewer
 reviewer  --retrabajo---------------> coder
-reviewer  --cambio contenido--------> specifier   (feature completa)
-reviewer  --cambio estructural------> architect
+reviewer  --revisión aprobada-------> architect   (siempre)
 architect --ajustes-----------------> coder       (vuelve por el reviewer)
 architect --arquitectura sana-------> specifier   (feature completa)
-specifier: merge + PR + marcar completa + siguiente feature aprobada
+specifier: merge sin commit ni push, espera revisión del usuario
 ```
 
 - **specifier**: un único documento de especificación por pedido (`features/<nombre>.spec.md`) más un único `.feature`, sin fragmentar por tecnología. El trabajo grande se expresa en fases ordenadas: esqueleto (estructura, infraestructura, límites), músculo (funciones reales, llamadas a APIs y base de datos, tests de comportamiento real) y piel (seguridad, escalabilidad, arquitectura). El presupuesto de trabajo son ~8 fases por feature.
 - **coder**: recibe de cualquier rol, ejecuta el plan de fases completo con TDD y entrega siempre al reviewer.
-- **reviewer**: revisa contra la especificación como base absoluta, ejecuta los tests, se conecta a APIs y bases reales, cubre lo que falte, y reenvía a exactamente uno: architect si el cambio es estructural, specifier si está contenido.
+- **reviewer**: revisa contra la especificación como base absoluta, ejecuta los tests, se conecta a APIs y bases reales, cubre lo que falte, y reenvía siempre al architect.
 - **architect**: revisa la arquitectura completa, código muerto y ubicación de archivos; manda ajustes al coder o la señal de cierre al specifier.
 
 El ruteo no es solo una convención de prompts: `swarm_handoff.sh` rechaza los handoffs que salen del ciclo.
