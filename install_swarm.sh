@@ -15,6 +15,8 @@
 # Usage:
 #   ./install_swarm.sh                     # install into the current dir
 #   ./install_swarm.sh /path/to/project    # install into a project dir
+#   ./install_swarm.sh --yes /path         # update an existing install without
+#                                          # the confirmation prompt (CI / no tty)
 #   SWARM_RELEASE_TAG=v1.2.3 ./install_swarm.sh
 #   SWARM_RELEASE_REPO=owner/swarm-local ./install_swarm.sh
 #
@@ -28,11 +30,37 @@ set -euo pipefail
 
 RELEASE_REPO="${SWARM_RELEASE_REPO:-goncalodjay/swarm-local}"
 RELEASE_TAG="${SWARM_RELEASE_TAG:-latest}"
-TARGET_DIR="${1:-$PWD}"
+TARGET_DIR=""
+UPDATE_ARGS=()
+while (($#)); do
+  case "$1" in
+  --yes | -y)
+    UPDATE_ARGS+=(--yes)
+    ;;
+  --languages | -l)
+    [[ $# -ge 2 ]] || {
+      echo "Missing value for $1" >&2
+      exit 2
+    }
+    UPDATE_ARGS+=(--languages "$2")
+    shift
+    ;;
+  -*)
+    echo "Unknown option: $1" >&2
+    exit 2
+    ;;
+  *)
+    TARGET_DIR="$1"
+    ;;
+  esac
+  shift
+done
+TARGET_DIR="${TARGET_DIR:-$PWD}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TUI_BUNDLE_NAME="swarm-tui"
 LOCAL_BUNDLE="$SCRIPT_DIR/tui/dist/swarm-tui"
+PLATFORM=""
 
 mprintf() { printf "$@" >&2; }
 
@@ -42,6 +70,22 @@ header() {
 }
 
 err() { printf '\033[31mError:\033[0m %s\n' "$1" >&2; exit 1; }
+
+# Windows ships python.exe only; python3 may resolve to the Microsoft Store
+# stub ("App execution alias"), which prints an error and exits non-zero.
+# Resolve a real, runnable Python 3 and cache it in $PYTHON.
+find_python() {
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
+    PYTHON=python3
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1 && python -c 'import sys' >/dev/null 2>&1; then
+    PYTHON=python
+    return 0
+  fi
+  PYTHON=""
+  return 1
+}
 
 detect_platform() {
   local os arch
@@ -61,9 +105,10 @@ detect_platform() {
 
 require_basic_tools() {
   local missing=()
-  for tool in bash curl python3 herdr engram git; do
+  for tool in bash curl herdr engram git; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
+  find_python || missing+=("python3")
   if ((${#missing[@]} > 0)); then
     err "Missing required tools: ${missing[*]}. Install them and retry."
   fi
@@ -128,6 +173,18 @@ build_bundle_locally() {
   command -v node >/dev/null 2>&1 || err "Node is required to build the TUI (https://nodejs.org/)."
   command -v bun >/dev/null 2>&1 || install_bun
   (cd "$SCRIPT_DIR/tui" && npm install --no-audit --no-fund && npm run build)
+  # Bun's --compile appends .exe on Windows, and Windows needs that suffix to
+  # run the binary.
+  resolve_local_bundle
+}
+
+# Bun's --compile appends .exe on Windows: point LOCAL_BUNDLE at the file that
+# actually exists, so the installer neither rebuilds the TUI nor installs a
+# binary that cannot be launched.
+resolve_local_bundle() {
+  if [[ "$PLATFORM" == windows-* && -f "$LOCAL_BUNDLE.exe" ]]; then
+    LOCAL_BUNDLE="$LOCAL_BUNDLE.exe"
+  fi
 }
 
 stage_from_manifest() {
@@ -145,11 +202,9 @@ stage_from_manifest() {
   if ! curl -fsSL --retry 3 -o "$tmpdir/manifest.json" "$manifest_url"; then
     return 1
   fi
-  if ! command -v python3 >/dev/null 2>&1; then
-    return 1
-  fi
+  find_python || return 1
   local asset_url
-  asset_url="$(python3 - "$tmpdir/manifest.json" "$triple" <<'PY'
+  asset_url="$("$PYTHON" - "$tmpdir/manifest.json" "$triple" <<'PY'
 import json, sys, pathlib
 manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
 triple = sys.argv[2]
@@ -166,7 +221,7 @@ PY
   mprintf 'Manifest points at %s for %s.\n' "$asset_url" "$triple"
   curl -fsSL --retry 3 -o "$tmpdir/$asset_url" "https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}/$asset_url"
   local sha
-  sha="$(python3 - "$tmpdir/manifest.json" "$asset_url" <<'PY'
+  sha="$("$PYTHON" - "$tmpdir/manifest.json" "$asset_url" <<'PY'
 import json, sys, pathlib
 manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
 target = sys.argv[2]
@@ -201,6 +256,7 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 PLATFORM="$(detect_platform)"
+resolve_local_bundle
 mprintf 'Detected platform: %s\n\n' "$PLATFORM"
 
 TUI_OK=0
@@ -217,13 +273,14 @@ fi
 
 [[ -x "$LOCAL_BUNDLE" ]] || err "TUI bundle missing or not executable at $LOCAL_BUNDLE."
 
-# An existing install only gets its code refreshed; its swarmforge.conf and
-# constitution are kept. Without this, an old install keeps running stale
-# scripts (e.g. still requiring tmux after the herdr migration).
+# An existing install is UPDATED in place (scripts, role prompts, constitution,
+# launchers, TUI, toolchain; swarmforge.conf is reconciled, not overwritten).
+# swarm-init --update checks for a running swarm and uncommitted work first and
+# asks for confirmation (or needs --yes without a terminal).
 if [[ -f "$TARGET_DIR/swarmforge/swarmforge.conf" ]]; then
-  mprintf '\nExisting install found; updating %s …\n' "$TARGET_DIR"
-  exec "$SCRIPT_DIR/swarm-init" --update "$TARGET_DIR"
+  mprintf '\nInstalación existente encontrada; actualizando %s ...\n' "$TARGET_DIR"
+  exec "$SCRIPT_DIR/swarm-init" --update ${UPDATE_ARGS[@]+"${UPDATE_ARGS[@]}"} "$TARGET_DIR"
 fi
 
 mprintf '\nRunning swarm-init on %s …\n' "$TARGET_DIR"
-exec "$SCRIPT_DIR/swarm-init" "$TARGET_DIR"
+exec "$SCRIPT_DIR/swarm-init" ${UPDATE_ARGS[@]+"${UPDATE_ARGS[@]}"} "$TARGET_DIR"
