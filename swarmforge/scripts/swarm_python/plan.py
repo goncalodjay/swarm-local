@@ -25,7 +25,7 @@ import time
 import uuid
 from pathlib import Path
 
-PLAN_STATUSES = ("draft", "approved")
+PLAN_STATUSES = ("draft", "approved", "done")
 FEATURE_STATUSES = ("pending", "coding", "review", "arch", "awaiting_merge", "merged")
 # A feature in one of these statuses is between "handed to the coder" and
 # "merged"; at most one feature may be in this state at any time.
@@ -44,7 +44,23 @@ TRANSITIONS = {
     "merged": frozenset(),
 }
 # Fields the swarm writes at runtime; they never count as plan content.
-RUNTIME_FEATURE_FIELDS = ("status", "review_rounds", "escalated", "metrics", "base_commit")
+RUNTIME_FEATURE_FIELDS = (
+    "status", "review_rounds", "escalated", "metrics", "base_commit",
+    # Publish / merge lifecycle (written by plan_flow, never by the specifier).
+    "final_commit", "pr_url", "published_at", "merge_commit", "synced_at", "report",
+    "pr_closed_at", "pub_branch", "merge_source", "defer_noted_at",
+)
+# Runtime fields that hold a plain string.
+STRING_RUNTIME_FIELDS = (
+    "final_commit", "pr_url", "published_at", "merge_commit", "synced_at", "report",
+    "pr_closed_at", "pub_branch", "merge_source", "defer_noted_at",
+)
+# Plan-level delivery settings. They decide HOW finished work is delivered, not
+# WHAT is built, so editing them never invalidates the approval (see content_hash).
+DELIVERY_PLAN_FIELDS = ("base_branch", "auto_publish", "auto_next", "flow_version")
+# Version of the delivery flow that has processed this plan (see migrate_flow).
+FLOW_VERSION = 1
+BASE_BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
 DEFAULT_MAX_REVIEW_ROUNDS = 3
 
 LINE_GUIDE = 400
@@ -126,6 +142,31 @@ def _master_checkout(cwd):
     return None
 
 
+def valid_base_branch(name):
+    """True for a branch name that is safe to use as a PR base: never a swarm
+    delivery branch, never an option-looking or path-escaping name."""
+    if not isinstance(name, str) or not name or name != name.strip():
+        return False
+    if not BASE_BRANCH_RE.fullmatch(name):
+        return False
+    if name == "swarm" or name.startswith("swarm/"):
+        return False
+    if ".." in name or "//" in name or name.endswith(("/", ".")) or "/." in name:
+        return False
+    return not any(part.endswith(".lock") for part in name.split("/"))
+
+
+def git_origin_url(root):
+    """URL of the `origin` remote of `root`, '' when there is none. Never raises."""
+    try:
+        r = subprocess.run(
+            ["git", "remote", "get-url", "origin"], capture_output=True, text=True,
+            cwd=str(root), timeout=15, stdin=subprocess.DEVNULL)
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
 def plan_path(plan_dir):
     return Path(plan_dir) / "plan.json"
 
@@ -197,14 +238,15 @@ LOCK_POLL = 0.05
 
 
 @contextlib.contextmanager
-def plan_lock(plan_dir):
+def plan_lock(plan_dir, name="plan.lock", stale=None):
     """Exclusive cross-process lock (`plan.lock`, created with O_EXCL).
 
     A lock file older than LOCK_STALE_SECONDS belongs to a crashed process and
     is taken over. Not reentrant: callers inside the lock must use the
     `_unlocked` helpers.
     """
-    lock = Path(plan_dir) / "plan.lock"
+    lock = Path(plan_dir) / name
+    stale = LOCK_STALE_SECONDS if stale is None else stale
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -220,7 +262,7 @@ def plan_lock(plan_dir):
             break
         except FileExistsError:
             try:
-                if time.time() - lock.stat().st_mtime > LOCK_STALE_SECONDS:
+                if time.time() - lock.stat().st_mtime > stale:
                     lock.unlink()
                     continue
             except OSError:
@@ -297,6 +339,16 @@ def validate(plan, plan_dir):
             errors.append(f"Plan is missing field '{field}'.")
     if plan.get("status") not in PLAN_STATUSES and "status" in plan:
         errors.append(f"Plan status must be one of {', '.join(PLAN_STATUSES)}; got '{plan.get('status')}'.")
+    for flag in ("auto_publish", "auto_next"):
+        if flag in plan and not isinstance(plan[flag], bool):
+            errors.append(f"Plan field '{flag}' must be true or false.")
+    if "base_branch" in plan and not (
+            isinstance(plan["base_branch"], str) and plan["base_branch"].strip()):
+        errors.append("Plan field 'base_branch' must be a non-empty string.")
+    elif isinstance(plan.get("base_branch"), str) and not valid_base_branch(plan["base_branch"].strip()):
+        errors.append(
+            "Plan field 'base_branch' is not a safe branch name (no 'swarm/' prefix, '..', "
+            "whitespace, leading '-' or unusual characters).")
     if "max_review_rounds" in plan:
         cap = plan["max_review_rounds"]
         if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
@@ -335,6 +387,9 @@ def validate(plan, plan_dir):
             errors.append(f"Feature {label} field 'review_rounds' must be a non-negative integer.")
         if "base_commit" in f and not isinstance(f["base_commit"], str):
             errors.append(f"Feature {label} field 'base_commit' must be a string.")
+        for text_field in STRING_RUNTIME_FIELDS:
+            if text_field in f and not isinstance(f[text_field], str):
+                errors.append(f"Feature {label} field '{text_field}' must be a string.")
         if "metrics" in f and not isinstance(f["metrics"], dict):
             errors.append(f"Feature {label} field 'metrics' must be an object.")
         if "status" in f and f["status"] not in FEATURE_STATUSES:
@@ -529,10 +584,11 @@ def approval_file(plan_dir):
 
 
 def content_hash(plan_dir):
-    """sha256 of the plan content minus statuses/approved_at, plus the bytes of
-    general.md and features/*.md."""
+    """sha256 of the plan content minus statuses/approved_at/delivery settings
+    and per-feature runtime fields, plus the bytes of general.md and features/*.md."""
     plan = load(plan_dir)
-    canon = {k: v for k, v in plan.items() if k not in ("status", "approved_at")}
+    ignored = ("status", "approved_at") + DELIVERY_PLAN_FIELDS
+    canon = {k: v for k, v in plan.items() if k not in ignored}
     raw_features = plan.get("features") if isinstance(plan.get("features"), list) else []
     canon["features"] = [
         {k: v for k, v in f.items() if k not in RUNTIME_FEATURE_FIELDS} if isinstance(f, dict) else f
@@ -560,13 +616,65 @@ def record_approval(plan_dir, now_iso=""):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        base = load(plan_dir).get("base_branch")
+        base = base.strip() if isinstance(base, str) and valid_base_branch(base.strip()) else ""
         tmp.write_text(json.dumps({
             "sha256": content_hash(plan_dir), "approved_at": now_iso,
             "plan_dir": str(Path(plan_dir).resolve()),
+            # Delivery targets pinned at approval: the flow refuses to push or
+            # open PRs if plan.json or the remote no longer match them.
+            "base_branch": base, "origin_url": git_origin_url(_project_root(plan_dir)),
         }, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, path)
     except OSError as e:
         raise PlanError(f"Could not record the approval at {path}: {e}")
+
+
+def approval_pins(plan_dir):
+    """{'base_branch', 'origin_url'} pinned at approval, or None when the
+    approval record is missing or predates pinning."""
+    try:
+        data = json.loads(approval_file(plan_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "base_branch" not in data or "origin_url" not in data:
+        return None
+    return {"base_branch": data.get("base_branch") or "", "origin_url": data.get("origin_url") or ""}
+
+
+def pin_current_targets(plan_dir):
+    """One-time upgrade path: an approval recorded before pinning existed gets
+    the CURRENT base branch and origin URL pinned, but only while the plan
+    content still matches the approval (so nothing unapproved is blessed)."""
+    if approval_pins(plan_dir) is not None or approval_errors(plan_dir):
+        return False
+    path = approval_file(plan_dir)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        base = load(plan_dir).get("base_branch")
+        base = base.strip() if isinstance(base, str) and valid_base_branch(base.strip()) else ""
+        data["base_branch"] = base
+        data["origin_url"] = git_origin_url(_project_root(plan_dir))
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except (OSError, ValueError, PlanError):
+        return False
+    return True
+
+
+def migrate_flow(plan):
+    """One-time migration to flow version 1 (in place; True when changed).
+
+    Features merged before the delivery flow existed must never trigger a
+    sync, worktree reset or dispatch: they are marked synced up front."""
+    if plan.get("flow_version", 0) >= FLOW_VERSION:
+        return False
+    for f in _features(plan):
+        if f.get("status") == "merged" and not f.get("synced_at"):
+            f["synced_at"] = "migrated"
+    plan["flow_version"] = FLOW_VERSION
+    return True
 
 
 def approval_errors(plan_dir):
@@ -610,6 +718,9 @@ def reset_runtime_counters(feature):
     feature["review_rounds"] = 0
     feature["escalated"] = False
     feature.pop("metrics", None)
+    # A reopened (or freshly reserved) feature has no PR, final commit or sync yet.
+    for name in STRING_RUNTIME_FIELDS:
+        feature.pop(name, None)
 
 
 def _set_status_unlocked(plan_dir, feature_id, status, force=False):
@@ -898,11 +1009,85 @@ def plan_check_text(metrics):
     return f"Plan check: {head}; {scope}. Advisory only."
 
 
+def update_feature(plan_dir, feature_id, **fields):
+    """Set runtime fields on one feature under the plan lock (a None value
+    removes the field). Returns the updated plan."""
+    with plan_lock(plan_dir):
+        plan = load(plan_dir)
+        feature = feature_by_id(plan, feature_id)
+        if feature is None:
+            raise PlanError(f"Unknown feature '{feature_id}'.")
+        for key, value in fields.items():
+            if value is None:
+                feature.pop(key, None)
+            else:
+                feature[key] = value
+        save(plan_dir, plan)
+    return plan
+
+
+def mark_merged(plan_dir, feature_id, merge_commit=""):
+    """Code-owned edge `awaiting_merge -> merged` (merge detected). The human
+    `set-status` reaches the same status through set_feature_status."""
+    with plan_lock(plan_dir):
+        plan = _set_status_unlocked(plan_dir, feature_id, "merged")
+        feature = feature_by_id(plan, feature_id)
+        if merge_commit:
+            feature["merge_commit"] = merge_commit
+        save(plan_dir, plan)
+    return plan
+
+
+def set_plan_status(plan_dir, status):
+    if status not in PLAN_STATUSES:
+        raise PlanError(f"Invalid plan status '{status}'.")
+    with plan_lock(plan_dir):
+        plan = load(plan_dir)
+        plan["status"] = status
+        save(plan_dir, plan)
+    return plan
+
+
+def detect_base_branch(root):
+    """Branch checked out in the master checkout `root`, else the remote's
+    default branch, else None. Never raises."""
+    def run(*args):
+        try:
+            r = subprocess.run(
+                ["git", *args], capture_output=True, text=True, cwd=str(root),
+                timeout=15, stdin=subprocess.DEVNULL,
+            )
+        except (subprocess.SubprocessError, OSError):
+            return ""
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    branch = run("rev-parse", "--abbrev-ref", "HEAD")
+    if branch and branch != "HEAD":
+        return branch
+    remote_head = run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if remote_head:
+        return remote_head[len("origin/"):] if remote_head.startswith("origin/") else remote_head
+    return None
+
+
 def approve(plan_dir, now_iso):
     with plan_lock(plan_dir):
         plan = load(plan_dir)
         plan["status"] = "approved"
         plan["approved_at"] = now_iso
+        # Where the finished features' PRs will point: the branch the human is
+        # working on right now. A value the human wrote into plan.json wins.
+        existing = plan.get("base_branch")
+        if not (isinstance(existing, str) and existing.strip()):
+            detected = detect_base_branch(_project_root(plan_dir))
+            if detected:
+                plan["base_branch"] = detected
+        chosen = plan.get("base_branch")
+        if isinstance(chosen, str) and chosen.strip() and not valid_base_branch(chosen.strip()):
+            raise PlanError(
+                f"base_branch '{chosen}' is not a safe branch name "
+                "(no 'swarm/' prefix, '..', whitespace or leading '-').")
+        migrate_flow(plan)
         for f in _features(plan):
             # Runtime state is written only by the swarm; never let a
             # pre-seeded value ride through approval.
@@ -927,6 +1112,8 @@ def check_specifier_to_coder(plan_dir, task):
         plan = load(plan_dir)
     except PlanError as e:
         return [str(e)]
+    if plan.get("status") == "done":
+        return ["The feature plan is complete: every feature is merged. There is nothing left to hand off."]
     if plan.get("status") != "approved":
         return [
             "The feature plan is not approved. Ask the user to run `swarm plan approve`; "

@@ -33,7 +33,7 @@ specifier: merge into working branch, NO commit/push, wait for user review
 - The reviewer sends to the coder for rework, and forward to the architect, always, when the review passes.
 - The architect sends adjustments to the coder and the completion signal to the specifier.
 - Every role may send work to the coder. Only the specifier closes a feature.
-- A handoff reaching the specifier from the architect means the feature is finished: merge into the working branch and stop, leaving changes uncommitted for the user to review. Commit, push and PR only after the user approves. Nothing starts the next feature automatically.
+- A handoff reaching the specifier from the architect means the feature is finished. The swarm itself (code, not an agent) publishes the final commit as a pull request for the user to review, detects the merge, syncs the worktrees and dispatches the next feature. The swarm never merges a pull request and never pushes to the base branch; the user does the merge.
 
 ## Specifications
 - A requested module is split by the specifier into sequential features recorded in the feature plan (`.swarmforge/plan/`): `plan.json`, `general.md` and one `features/<id>.md` per feature. Each feature is a vertical slice of approximately 400 lines of production code; the figure is a guide, never a limit.

@@ -7,6 +7,7 @@ import os
 import sys
 
 from . import plan as planlib
+from . import plan_flow
 from .handoff.timefmt import now_iso
 
 USAGE = """\
@@ -16,6 +17,8 @@ Uso: swarm plan <comando>
   show                          muestra el plan y el contexto de cada feature
   status                        muestra el estado de cada feature
   approve                       aprueba el plan (solo lo puede hacer una persona)
+  publish <id>                  (re)publica una feature terminada: sube el commit y abre el PR
+  sync                          detecta PRs mergeados, sincroniza y despacha la siguiente feature
   set-status <id> <estado> [--force]
                                 cambia el estado de una feature (manual);
                                 --force permite saltos que el ciclo no permite
@@ -75,8 +78,14 @@ def cmd_status(plan_dir):
     if plan is None:
         return 1
     _out(f"Plan: {plan.get('title', '')} - estado: {plan.get('status', '?')}")
+    if plan.get("base_branch"):
+        _out(f"Rama base: {plan['base_branch']}")
     for f in plan.get("features", []):
         _out(f"  {f.get('status', '?'):<15} {f.get('id', '?')}")
+        if f.get("final_commit"):
+            _out(f"      commit final: {f['final_commit'][:10]}")
+        if f.get("pr_url"):
+            _out(f"      PR: {f['pr_url']}")
     nxt = planlib.next_ready_feature(plan)
     _out(f"Proxima feature lista: {nxt['id'] if nxt else 'ninguna'}")
     return 0
@@ -117,9 +126,9 @@ def cmd_set_status(plan_dir, feature_id, status, env, force=False):
             "no se puede ejecutar desde dentro de un agente."
         )
         return 3
-    # Statuses move automatically with the handoffs; the only manual edge left
-    # is awaiting_merge -> merged (until merge detection is automated), plus
-    # --force for repairs. Anything else is checked against TRANSITIONS.
+    # Statuses move automatically with the handoffs and merge detection; this
+    # manual edge stays for repairs (awaiting_merge -> merged when detection
+    # cannot see the merge), plus --force. Checked against TRANSITIONS.
     try:
         planlib.set_feature_status(plan_dir, feature_id, status, force=force)
     except planlib.TransitionError as e:
@@ -135,7 +144,52 @@ def cmd_set_status(plan_dir, feature_id, status, env, force=False):
     return 0
 
 
-def main(argv, plan_dir=None, env=None):
+def _human_only(env, what):
+    if env.get("SWARMFORGE_ROLE"):
+        _err(
+            f"Solo una persona puede {what}: este comando no se puede ejecutar "
+            "desde dentro de un agente."
+        )
+        return False
+    return True
+
+
+def _flow(plan_dir, flow=None):
+    if flow is not None:
+        return flow
+    return plan_flow.PlanFlow(planlib._project_root(plan_dir))
+
+
+def cmd_publish(plan_dir, feature_id, env, flow=None):
+    if not _human_only(env, "publicar una feature"):
+        return 3
+    flow = _flow(plan_dir, flow)
+    result = flow.publish(feature_id)
+    if not result.ok:
+        _err(f"No se pudo publicar '{feature_id}': {result.message}")
+        return 1
+    _out(f"Feature {feature_id} publicada: {result.pr_url}")
+    return 0
+
+
+def cmd_sync(plan_dir, env, flow=None):
+    if not _human_only(env, "sincronizar el plan"):
+        return 3
+    if not planlib.exists(plan_dir):
+        _err(f"No hay plan en {planlib.plan_path(plan_dir)}.")
+        return 1
+    flow = _flow(plan_dir, flow)
+    roles = plan_flow.roles_from_tsv(flow.root / ".swarmforge" / "roles.tsv")
+    actions = flow.poll_merges(roles, force=True)
+    if not actions:
+        _out("Nada que sincronizar (ningun PR mergeado nuevo o la sincronizacion quedo pendiente; ver .swarmforge/logs/plan-flow.log).")
+        return 0
+    for action in actions:
+        _out(f"- {action}")
+    return 0
+
+
+def main(argv, plan_dir=None, env=None, flow=None):
     env = os.environ if env is None else env
     if not argv or argv[0] in ("-h", "--help", "help"):
         _out(USAGE)
@@ -150,6 +204,10 @@ def main(argv, plan_dir=None, env=None):
         return cmd_status(plan_dir)
     if cmd == "approve" and not rest:
         return cmd_approve(plan_dir, env)
+    if cmd == "publish" and len(rest) == 1:
+        return cmd_publish(plan_dir, rest[0], env, flow)
+    if cmd == "sync" and not rest:
+        return cmd_sync(plan_dir, env, flow)
     if cmd == "set-status":
         force = "--force" in rest
         args = [a for a in rest if a != "--force"]

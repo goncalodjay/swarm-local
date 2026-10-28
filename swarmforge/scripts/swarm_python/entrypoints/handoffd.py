@@ -16,6 +16,7 @@ from swarm_python.handoff.timefmt import now_iso
 from swarm_python.herdr_ops import pane_run
 from swarm_python.launch import start_role
 from swarm_python.paths import build_context
+from swarm_python.plan_flow import DAEMON_TIMEOUTS, PlanFlow
 from swarm_python.scheduler import WAKE_MESSAGE, HerdrPanes, Scheduler
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent
@@ -112,7 +113,8 @@ def fail_(path, reason, log_file, daemon_dir):
 
 
 def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir,
-            is_running=lambda role: True, on_sent=lambda sender, task: None):
+            is_running=lambda role: True, on_sent=lambda sender, task: None,
+            after_deliver=lambda sender, headers, recipients, body: None):
     """Move one outbox handoff into each recipient's inbox. Running
     recipients get a wake-up in their pane; parked ones are launched by the
     scheduler on its next tick, which finds the mail waiting."""
@@ -149,6 +151,12 @@ def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir,
         )
         move_with_collision(path, sent_dir)
     log(log_file, daemon_dir, "delivered", str(path))
+    # Plan delivery (publish a finished feature as a PR) must never break or
+    # undo a delivery that already succeeded.
+    try:
+        after_deliver(sender_role, headers, recipients, message["body"])
+    except Exception as e:
+        log(log_file, daemon_dir, "after-deliver-error", str(path), repr(e))
 
 
 def outbox_files(role_info):
@@ -198,7 +206,7 @@ def build_scheduler(project_root, log_file, daemon_dir):
     )
 
 
-def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None):
+def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None, plan_flow=None):
     if should_stop(stop_file):
         return
     roles_file = state_dir / "roles.tsv"
@@ -213,6 +221,11 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None):
             "is_running": lambda role: scheduler.is_running(state, role),
             "on_sent": lambda sender, task: scheduler.on_sent(state, sender, task),
         }
+    if plan_flow is not None:
+        delivery_hooks["after_deliver"] = (
+            lambda sender, headers, recipients, body:
+            plan_flow.on_delivered(roles, sender, headers, recipients, body)
+        )
     for role, role_info in roles.items():
         if should_stop(stop_file):
             break
@@ -234,6 +247,14 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None):
                         str(path),
                         str(nested),
                     )
+    if plan_flow is not None and not should_stop(stop_file):
+        # Only queues a poll for the flow's worker (rate-limited, with backoff):
+        # merge detection, worktree sync and next-feature dispatch happen there.
+        # Failures are logged and never stop the daemon loop.
+        try:
+            plan_flow.poll_merges(roles)
+        except Exception as e:
+            log(log_file, daemon_dir, "plan-poll-error", repr(e))
     if scheduler is None or should_stop(stop_file):
         return
     try:
@@ -264,11 +285,16 @@ def main():
 
     log(log_file, daemon_dir, "started")
     scheduler = build_scheduler(project_root, log_file, daemon_dir)
+    # Plan delivery runs on the flow's own worker thread with short git/gh
+    # timeouts, so it can never stall handoff delivery or the scheduler tick.
+    flow = PlanFlow(project_root, log=lambda *parts: log(log_file, daemon_dir, *parts),
+                    synchronous=False, **DAEMON_TIMEOUTS)
     try:
         while not should_stop(stop_file):
-            poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler)
+            poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler, flow)
             sleep_poll(POLL_MS, stop_file)
     finally:
+        flow.close()
         pid_file.unlink(missing_ok=True)
         log(log_file, daemon_dir, "stopped")
 

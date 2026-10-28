@@ -214,8 +214,8 @@ coder     --cada cambio-------------> reviewer
 reviewer  --verdict: fail-----------> coder       (retrabajo; con el tope de rondas escala al architect)
 reviewer  --verdict: pass-----------> architect   (siempre)
 architect --ajustes-----------------> coder       (vuelve por el reviewer)
-architect --arquitectura sana-------> specifier   (feature completa)
-specifier: merge sin commit ni push, espera revisión del usuario
+architect --arquitectura sana-------> specifier   (feature completa: el swarm publica el PR)
+código    --PR + detección de merge + siguiente feature--> coder   (automático, ver "Plan de features")
 ```
 
 - **specifier**: entrevista al usuario pregunta por pregunta y divide el módulo en features secuenciales de ~400 líneas de código de producción (ver "Plan de features").
@@ -233,7 +233,10 @@ El specifier no entrega el módulo entero: lo divide en features **secuenciales*
 2. Revisas la división y, si está bien, la apruebas tú desde tu terminal con `./swarm plan approve`. El comando se niega a correr dentro de un agente, y mientras el plan esté en `draft` el swarm rechaza cualquier handoff del specifier al coder.
 3. El specifier entrega **solo la siguiente feature lista** (`task:` = id de la feature). El swarm rechaza el handoff si no hay plan aprobado, si el id no existe, si la feature no está `pending`, si sus dependencias no están `merged` o si hay otra feature en curso. Al encolarse, la feature pasa a `coding`. La aprobación guarda un hash del contenido del plan (sin los estados) en `~/.swarmforge/approvals/`; si el specifier modifica `plan.json` o algún `.md` después de aprobar, el handoff se rechaza hasta que vuelvas a ejecutar `./swarm plan approve`. Es un control de integridad, no una barrera de seguridad.
 4. El coder ve la visión general más solo el slice de su feature; nunca las demás.
-5. Cuando una feature se mergea, marca el estado a mano (paso temporal hasta automatizarlo): `./swarm plan set-status <id> merged`. Solo entonces el specifier puede entregar la siguiente.
+5. Cuando el architect da una feature por completa, **el código** (no un agente) la publica: sube el commit final a la rama `swarm/<plan>/<feature>` (sin tocar tu checkout, sin `--force`, nunca a la rama base) y abre un PR hacia la rama base con `gh pr create`. La rama base es la que tenías activa al ejecutar `plan approve` (queda en `base_branch` de `plan.json`). El PR lleva resumen, criterios de aceptación como checklist, métricas informativas (líneas de producción frente a ~400, archivos fuera de `allowed_paths`), rondas de revisión, enlace al PR anterior y el reporte del architect.
+6. **Las features esperan a que tú mergees cada PR.** El swarm nunca mergea ni pushea a la rama base. El demonio revisa cada 30 s (`SWARMFORGE_PLAN_POLL_S`) si el PR quedó `MERGED` (con `gh pr view`) o si el commit final ya es alcanzable desde `origin/<rama base>`; al detectarlo marca la feature `merged`, hace `git fetch`, avanza tu checkout con fast-forward (solo si está limpio y en la rama base), reinicia las ramas `swarmforge-<rol>` de los worktrees (solo si están limpios y sin trabajo pendiente; si no, reintenta en el siguiente ciclo sin perder nada) y entrega solo la siguiente feature al coder pasando por la misma validación del handoff manual. Con la última feature mergeada el plan pasa a `done`. El specifier recibe una nota corta en cada paso.
+   - **Seguridad del flujo:** la rama base y la URL de `origin` quedan fijadas al ejecutar `plan approve`; si cambian, el swarm se niega a pushear y avisa. Las respuestas de `gh` solo se aceptan si coinciden con la rama base, la rama `swarm/...` y el commit publicado. Antes de mover una rama `swarmforge-<rol>` con commits locales sin integrar se crea una copia en `refs/swarmforge/backup/<rol>/<fecha>`. El trabajo de git/gh corre en un hilo aparte del demonio, con reintentos cada vez más espaciados (hasta 5 min) si algo falla. Si un PR se cierra sin mergear, el specifier recibe una nota y la feature se republica con `swarm plan publish <id>`. Sin `gh` autenticado los merges por squash o rebase no se detectan (el commit no queda alcanzable): corré `swarm plan set-status <id> merged`; en ese caso el swarm avanza tu checkout pero no reinicia los worktrees ni despacha solo la siguiente feature.
+7. Si no hay `origin`, el push falla o falta `gh`, el demonio no se cae: lo registra en `.swarmforge/logs/plan-flow.log`, avisa al specifier con una nota y la feature queda en `awaiting_merge`. Corrige la causa y ejecuta `./swarm plan publish <id>`.
 
 Los estados se mueven solos con los handoffs de la feature (solo para tareas cuyo `task:` es el id de una feature del plan; el trabajo fuera del plan no se toca):
 
@@ -244,11 +247,13 @@ Los estados se mueven solos con los handoffs de la feature (solo para tareas cuy
 | reviewer (`fail`) -> coder | `review` -> `coding` y `review_rounds` + 1 |
 | reviewer (`pass`) -> architect | `review` -> `arch` |
 | architect -> coder (ajustes) | `arch` -> `coding` |
-| architect -> specifier | `arch` -> `awaiting_merge` |
-| tú: `set-status <id> merged` | `awaiting_merge` -> `merged` (único paso manual) |
+| architect -> specifier | `arch` -> `awaiting_merge` (el swarm publica el PR; `awaiting_merge` = PR abierto) |
+| PR mergeado (detectado por el demonio) | `awaiting_merge` -> `merged`, y la siguiente feature pasa a `coding` |
+| tú: `set-status <id> merged` | alternativa manual si la detección no ve el merge |
 
 - **Tope de rondas de revisión**: `plan.json` acepta `max_review_rounds` (entero >= 1, por defecto 3). Al alcanzarlo, un `verdict: fail` ya no vuelve al coder: el swarm lo acepta solo si va al architect, marca la feature con `escalated: true` y el architect decide si corrige los defectos restantes o los acepta y los informa al specifier. El contador se reinicia al reservar la feature y cuando una feature `awaiting_merge` se reabre a `coding`; el retrabajo `arch` -> `coding` lo conserva.
 - **Métricas informativas**: en coder -> reviewer el swarm calcula con git las líneas de producción cambiadas (sin tests, lockfiles ni `docs/*.md`) y los archivos fuera de `allowed_paths`, las guarda en `feature.metrics`, las muestra en el stderr del coder y las agrega al handoff del reviewer como bloque `Plan check:`. Son solo advertencias: nunca rechazan un handoff ni cortan el trabajo del coder.
+- **Ajustes de entrega** en `plan.json` (booleanos, por defecto `true`): `auto_publish` publica el PR automáticamente y `auto_next` despacha la siguiente feature tras el merge; con `false` esos pasos quedan manuales (`./swarm plan publish <id>`, o el specifier entrega la feature). También `base_branch` (rama destino de los PR). Son ajustes de entrega, no alcance: cambiarlos **no** invalida la aprobación, igual que los estados y los campos de ejecución (`final_commit`, `pr_url`, `published_at`, `merge_commit`).
 - Mientras exista un plan, un `note` del specifier al coder solo se acepta si hay una feature en curso (`coding`, `review` o `arch`); el trabajo nuevo solo entra por el handoff de una feature aprobada.
 - `set-status` valida los saltos contra la tabla de arriba (y que no haya dos features en curso); para reparar un estado a mano usa `--force`.
 
@@ -258,7 +263,9 @@ Comandos (se ejecutan desde la raíz del proyecto o desde cualquier worktree; el
 | --- | --- |
 | `./swarm plan validate` | Valida el plan: errores (campos, ids duplicados, dependencias inexistentes o en ciclo, criterios vacíos, archivos faltantes) y advertencias de tamaño. |
 | `./swarm plan show` | Muestra el plan completo. |
-| `./swarm plan status` | Estado de cada feature y cuál es la próxima lista. |
+| `./swarm plan status` | Estado de cada feature, su commit final y su PR, y cuál es la próxima lista. |
+| `./swarm plan publish <id>` | Publica (o reintenta publicar) una feature en `awaiting_merge`: sube el commit y abre el PR. Solo una persona. |
+| `./swarm plan sync` | Revisa ahora mismo si hay PR mergeados, sincroniza y despacha la siguiente feature. Solo una persona. |
 | `./swarm plan approve` | Valida y aprueba el plan. Solo lo puede ejecutar una persona. |
 | `./swarm plan set-status <id> <estado> [--force]` | Cambia el estado de una feature (`pending`, `coding`, `review`, `arch`, `awaiting_merge`, `merged`). Rechaza saltos ilegales (p. ej. `pending` -> `merged`) salvo con `--force`. Solo una persona. |
 
