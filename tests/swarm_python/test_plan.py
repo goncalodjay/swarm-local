@@ -263,7 +263,9 @@ class CliTests(PlanTestCase):
 
     def test_set_status_updates_and_rejects_bad_input(self):
         write_plan(self.dir, make_plan())
-        self.assertEqual(self.run_cli(["set-status", "a", "merged"])[0], 0)
+        self.assertEqual(self.run_cli(["set-status", "a", "merged"])[0], 1)
+        self.assertEqual(self.run_cli(["set-status", "a", "coding"])[0], 0)
+        self.assertEqual(self.run_cli(["set-status", "a", "merged", "--force"])[0], 0)
         self.assertEqual(planlib.load(self.dir)["features"][0]["status"], "merged")
         self.assertEqual(self.run_cli(["set-status", "a", "nope"])[0], 1)
         self.assertEqual(self.run_cli(["set-status", "zzz", "merged"])[0], 1)
@@ -346,7 +348,7 @@ class ApprovalTests(PlanTestCase):
         self.assertIn("plan content changed since approval", self.gate()[0])
 
     def test_status_only_changes_do_not_invalidate(self, _r):
-        planlib.set_feature_status(self.dir, "c", "merged")
+        planlib.set_feature_status(self.dir, "c", "merged", force=True)
         self.assertEqual(self.gate(), [])
 
     def test_reapproving_records_the_new_content(self, _r):
@@ -541,6 +543,406 @@ class HandoffMainTests(PlanTestCase):
         self.assertIn("HANDOFF QUEUED", out)
         self.assertIn("swarm plan set-status a coding", err)
         self.assertEqual(self.statuses()["a"], "pending")
+
+
+@mock.patch("swarm_python.entrypoints.swarm_handoff.role_known", return_value=True)
+@mock.patch("swarm_python.handoff.validate.role_known", return_value=True)
+class LifecycleTests(PlanTestCase):
+    """Status lifecycle, reviewer verdict routing, round cap, advisory metrics."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = Path(self._tmp.name) / "proj"
+        self.head = init_repo(self.root)
+        self.dir = self.root / ".swarmforge" / "plan"
+        write_plan(self.dir, make_plan())
+        self.draft = self.root / "draft.txt"
+
+    def send(self, role, to, task="a", verdict=None, commit=None, type_="git_handoff", message=None):
+        lines = [f"type: {type_}", f"to: {to}", "priority: 50"]
+        if type_ == "git_handoff":
+            lines += [f"task: {task}", f"commit: {commit or self.head}"]
+        else:
+            lines.append(f"message: {message or 'hello'}")
+        if verdict:
+            lines.append(f"verdict: {verdict}")
+        self.draft.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        env = {"SWARMFORGE_ROLE": role, "SWARMFORGE_PLAN_DIR": str(self.dir)}
+        cwd = os.getcwd()
+        out, err = io.StringIO(), io.StringIO()
+        os.chdir(self.root)
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["swarm_handoff", str(self.draft)]):
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    try:
+                        swarm_handoff.main()
+                        code = 0
+                    except SystemExit as e:
+                        code = e.code
+        finally:
+            os.chdir(cwd)
+        return code, out.getvalue(), err.getvalue()
+
+    def feat(self, fid="a"):
+        return planlib.feature_by_id(planlib.load(self.dir), fid)
+
+    def force(self, status, fid="a", **fields):
+        plan = planlib.load(self.dir)
+        f = planlib.feature_by_id(plan, fid)
+        f["status"] = status
+        f.update(fields)
+        planlib.save(self.dir, plan)
+
+    def outbox(self):
+        return sorted((self.root / ".swarmforge" / "handoffs" / "outbox").glob("*.handoff"))
+
+    # --- verdict -------------------------------------------------------------
+
+    def test_reviewer_verdict_is_required(self, _a, _b):
+        self.force("review")
+        code, _, err = self.send("reviewer", "architect")
+        self.assertEqual(code, 2)
+        self.assertIn("Missing required header 'verdict'", err)
+        self.assertEqual(self.feat()["status"], "review")
+
+    def test_verdict_must_be_pass_or_fail(self, _a, _b):
+        self.force("review")
+        code, _, err = self.send("reviewer", "architect", verdict="maybe")
+        self.assertEqual(code, 2)
+        self.assertIn("must be pass or fail", err)
+
+    def test_verdict_pass_goes_only_to_the_architect(self, _a, _b):
+        self.force("review")
+        code, _, err = self.send("reviewer", "coder", verdict="pass")
+        self.assertEqual(code, 2)
+        self.assertIn("verdict 'pass' must be sent to the architect only", err)
+        code, _, err = self.send("reviewer", "coder,architect", verdict="pass")
+        self.assertEqual(code, 2)
+        self.assertEqual(self.feat()["status"], "review")
+        self.assertEqual(self.send("reviewer", "architect", verdict="pass")[0], 0)
+        self.assertEqual(self.feat()["status"], "arch")
+
+    def test_verdict_fail_goes_only_to_the_coder(self, _a, _b):
+        self.force("review")
+        code, _, err = self.send("reviewer", "architect", verdict="fail")
+        self.assertEqual(code, 2)
+        self.assertIn("verdict 'fail' must be sent to the coder only", err)
+        self.assertEqual(self.send("reviewer", "coder", verdict="fail")[0], 0)
+        self.assertEqual(self.feat()["status"], "coding")
+
+    def test_verdict_from_another_role_is_rejected(self, _a, _b):
+        self.force("coding")
+        code, _, err = self.send("coder", "reviewer", verdict="pass")
+        self.assertEqual(code, 2)
+        self.assertIn("only allowed on a git_handoff sent by the reviewer", err)
+
+    def test_verdict_is_written_to_the_delivered_handoff(self, _a, _b):
+        self.force("review")
+        self.send("reviewer", "architect", verdict="pass")
+        self.assertEqual(header_field(self.outbox()[0], "verdict"), "pass")
+
+    # --- lifecycle -------------------------------------------------------------
+
+    def test_full_cycle_moves_the_status_and_counts_rounds(self, _a, _b):
+        self.assertEqual(self.send("specifier", "coder")[0], 0)
+        self.assertEqual(self.feat()["status"], "coding")
+        self.assertEqual(len(self.feat()["base_commit"]), 40)
+        self.assertEqual(self.send("coder", "reviewer")[0], 0)
+        self.assertEqual(self.feat()["status"], "review")
+        self.assertEqual(self.send("reviewer", "coder", verdict="fail")[0], 0)
+        self.assertEqual((self.feat()["status"], self.feat()["review_rounds"]), ("coding", 1))
+        self.assertEqual(self.send("coder", "reviewer")[0], 0)
+        self.assertEqual(self.send("reviewer", "architect", verdict="pass")[0], 0)
+        self.assertEqual((self.feat()["status"], self.feat()["review_rounds"]), ("arch", 1))
+        self.assertEqual(self.send("architect", "coder")[0], 0)
+        self.assertEqual(self.feat()["status"], "coding")
+        self.assertEqual(self.send("coder", "reviewer")[0], 0)
+        self.assertEqual(self.send("reviewer", "architect", verdict="pass")[0], 0)
+        self.assertEqual(self.send("architect", "specifier")[0], 0)
+        self.assertEqual(self.feat()["status"], "awaiting_merge")
+        self.assertEqual(self.feat("b")["status"], "pending")
+        self.assertEqual(self.feat("c")["status"], "pending")
+
+    def test_runtime_fields_do_not_invalidate_the_approval(self, _a, _b):
+        self.send("specifier", "coder")
+        self.send("coder", "reviewer")
+        self.send("reviewer", "coder", verdict="fail")
+        self.assertIn("review_rounds", self.feat())
+        self.assertEqual(planlib.approval_errors(self.dir), [])
+
+    def test_architect_cannot_forward_to_two_roles(self, _a, _b):
+        self.force("arch")
+        code, _, err = self.send("architect", "coder,specifier")
+        self.assertEqual(code, 2)
+        self.assertIn("must forward to exactly one of", err)
+
+    def test_outbox_failure_rolls_each_transition_back(self, _a, _b):
+        cases = [
+            ("coder", "reviewer", None, "coding", {}),
+            ("reviewer", "coder", "fail", "review", {"review_rounds": 1}),
+            ("reviewer", "architect", "pass", "review", {"review_rounds": 1}),
+            ("architect", "specifier", None, "arch", {}),
+            ("architect", "coder", None, "arch", {}),
+        ]
+        for role, to, verdict, status, extra in cases:
+            with self.subTest(role=role, to=to):
+                self.force(status, **extra)
+                before = self.feat()
+                with mock.patch.object(swarm_handoff, "write_handoff", side_effect=OSError("disk full")):
+                    with self.assertRaises(OSError):
+                        self.send(role, to, verdict=verdict)
+                self.assertEqual(self.feat(), before)
+                self.assertTrue(self.draft.exists())
+
+    def test_wrong_current_status_is_left_alone_with_a_note(self, _a, _b):
+        self.force("arch")
+        code, _, err = self.send("coder", "reviewer")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.feat()["status"], "arch")
+        self.assertIn("status left unchanged", err)
+
+    def test_legacy_task_is_not_touched_or_rejected(self, _a, _b):
+        before = planlib.load(self.dir)
+        self.assertEqual(self.send("coder", "reviewer", task="legacy-x")[0], 0)
+        self.assertEqual(self.send("reviewer", "architect", task="legacy-x", verdict="pass")[0], 0)
+        self.assertEqual(self.send("reviewer", "coder", task="legacy-x", verdict="fail")[0], 0)
+        self.assertEqual(self.send("architect", "specifier", task="legacy-x")[0], 0)
+        self.assertEqual(planlib.load(self.dir), before)
+
+    def test_no_plan_at_all_is_not_gated(self, _a, _b):
+        (self.dir / "plan.json").unlink()
+        self.assertEqual(self.send("coder", "reviewer", task="whatever")[0], 0)
+
+    # --- review round cap ------------------------------------------------------
+
+    def test_cap_must_be_a_positive_integer(self, _a, _b):
+        for bad in (0, -1, True, "3", 1.5):
+            plan = make_plan()
+            plan["max_review_rounds"] = bad
+            errors, _ = planlib.validate(plan, self.dir)
+            self.assertTrue(any("max_review_rounds" in e for e in errors), bad)
+        plan = make_plan()
+        plan["max_review_rounds"] = 2
+        self.assertEqual(planlib.validate(plan, self.dir)[0], [])
+        self.assertEqual(planlib.max_review_rounds({}), 3)
+        self.assertEqual(planlib.max_review_rounds(plan), 2)
+
+    def test_default_cap_bounces_until_three_rounds(self, _a, _b):
+        self.force("review", review_rounds=2)
+        self.assertEqual(self.send("reviewer", "coder", verdict="fail")[0], 0)
+        self.assertEqual(self.feat()["review_rounds"], 3)
+        self.force("review", review_rounds=3)
+        code, _, err = self.send("reviewer", "coder", verdict="fail")
+        self.assertEqual(code, 2)
+        self.assertIn("escalated", err)
+
+    def test_cap_reached_escalates_to_the_architect(self, _a, _b):
+        plan = planlib.load(self.dir)
+        plan["max_review_rounds"] = 2
+        planlib.save(self.dir, plan)
+        self.force("review", review_rounds=2)
+        code, _, err = self.send("reviewer", "architect", verdict="fail")
+        self.assertEqual(code, 0, err)
+        f = self.feat()
+        self.assertEqual((f["status"], f["review_rounds"], f["escalated"]), ("arch", 2, True))
+        self.assertIn("ESCALATION", self.outbox()[0].read_text(encoding="utf-8"))
+
+    def test_cap_escalation_rolls_back_on_outbox_failure(self, _a, _b):
+        self.force("review", review_rounds=3)
+        with mock.patch.object(swarm_handoff, "write_handoff", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.send("reviewer", "architect", verdict="fail")
+        f = self.feat()
+        self.assertEqual((f["status"], "escalated" in f), ("review", False))
+
+    # --- human set-status ------------------------------------------------------
+
+    def run_cli(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = plan_cli.main(argv, plan_dir=self.dir, env={})
+        return code, err.getvalue()
+
+    def test_set_status_rejects_illegal_jumps_unless_forced(self, _a, _b):
+        code, err = self.run_cli(["set-status", "a", "merged"])
+        self.assertEqual(code, 1)
+        self.assertIn("--force", err)
+        self.assertEqual(self.feat()["status"], "pending")
+        self.assertEqual(self.run_cli(["set-status", "a", "merged", "--force"])[0], 0)
+        self.assertEqual(self.feat()["status"], "merged")
+
+    def test_merged_is_reachable_only_from_awaiting_merge(self, _a, _b):
+        for status in ("pending", "coding", "review", "arch"):
+            self.force(status)
+            self.assertEqual(self.run_cli(["set-status", "a", "merged"])[0], 1, status)
+        self.force("awaiting_merge")
+        self.assertEqual(self.run_cli(["set-status", "a", "merged"])[0], 0)
+
+    def test_two_features_cannot_be_in_progress(self, _a, _b):
+        self.force("coding", "a")
+        code, err = self.run_cli(["set-status", "b", "coding"])
+        self.assertEqual(code, 1)
+        self.assertIn("--force", err)
+        self.assertEqual(self.feat("b")["status"], "pending")
+        self.assertEqual(self.run_cli(["set-status", "b", "coding", "--force"])[0], 0)
+
+    # --- note bypass -----------------------------------------------------------
+
+    def test_specifier_note_to_coder_needs_a_feature_in_progress(self, _a, _b):
+        code, _, err = self.send("specifier", "coder", type_="note")
+        self.assertEqual(code, 2)
+        self.assertIn("only accepted while a plan feature is in progress", err)
+        self.assertEqual(self.outbox(), [])
+        for status in ("coding", "review", "arch"):
+            self.force(status)
+            self.assertEqual(self.send("specifier", "coder", type_="note")[0], 0, status)
+        self.force("awaiting_merge")
+        self.assertEqual(self.send("specifier", "coder", type_="note")[0], 2)
+
+    def test_note_without_a_plan_is_still_accepted(self, _a, _b):
+        (self.dir / "plan.json").unlink()
+        self.assertEqual(self.send("specifier", "coder", type_="note")[0], 0)
+
+    # --- advisory metrics --------------------------------------------------------
+
+    def commit_files(self, files):
+        for rel, n in files.items():
+            path = self.root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("line\n" * n, encoding="utf-8")
+            git(self.root, "add", rel)
+        git(self.root, "commit", "-q", "-m", "work")
+        return git(self.root, "rev-parse", "--short=10", "HEAD")
+
+    def test_metrics_count_prod_lines_and_flag_files_outside_allowed(self, _a, _b):
+        self.send("specifier", "coder")
+        commit = self.commit_files({
+            "src/a/x.py": 10, "src/other/y.py": 5, "tests/test_x.py": 100,
+            "package-lock.json": 50, "docs/g.md": 20, "src/a/x_test.py": 7,
+        })
+        code, _, err = self.send("coder", "reviewer", commit=commit)
+        self.assertEqual(code, 0, err)
+        m = self.feat()["metrics"]
+        self.assertEqual((m["prod_lines"], m["files_total"]), (15, 6))
+        self.assertEqual(m["outside_allowed"], ["src/other/y.py"])
+        self.assertIn("Plan check: ~15 prod lines", err)
+        self.assertIn("src/other/y.py", err)
+        self.assertIn("Plan check:", self.outbox()[-1].read_text(encoding="utf-8"))
+
+    def test_oversize_only_warns(self, _a, _b):
+        self.send("specifier", "coder")
+        commit = self.commit_files({"src/a/big.py": 900})
+        code, _, err = self.send("coder", "reviewer", commit=commit)
+        self.assertEqual(code, 0)
+        self.assertIn("over target", err)
+        self.assertEqual(self.feat()["status"], "review")
+
+    def test_git_failure_skips_metrics_silently(self, _a, _b):
+        self.send("specifier", "coder")
+        with mock.patch.object(planlib, "compute_metrics", return_value=None):
+            code, _, err = self.send("coder", "reviewer")
+        self.assertEqual(code, 0)
+        self.assertIn("Plan check skipped", err)
+        self.assertEqual(self.feat()["status"], "review")
+        self.assertNotIn("metrics", self.feat())
+
+    def test_missing_base_commit_skips_metrics(self, _a, _b):
+        self.force("coding")
+        code, _, err = self.send("coder", "reviewer")
+        self.assertEqual(code, 0)
+        self.assertIn("no base commit", err)
+
+    def test_escalation_text_leads_the_body(self, _a, _b):
+        self.force("review", review_rounds=3)
+        with mock.patch.object(swarm_handoff.planlib, "locate_plan_dir", return_value=self.dir):
+            _, body = swarm_handoff.apply_feature_transition(
+                "reviewer", {"type": "git_handoff", "task": "a", "verdict": "fail"},
+                ["architect"], self.head, "Reviewer findings here",
+            )
+        self.assertTrue(body.startswith("ESCALATION"), body)
+        self.assertTrue(body.endswith("Reviewer findings here"))
+
+    def test_reserve_feature_resets_stale_runtime_state(self, _a, _b):
+        self.force("pending", review_rounds=2, escalated=True, metrics={"prod_lines": 1}, base_commit="old")
+        self.assertEqual(self.send("specifier", "coder")[0], 0)
+        f = self.feat()
+        self.assertEqual((f["status"], f["review_rounds"], f["escalated"]), ("coding", 0, False))
+        self.assertNotIn("metrics", f)
+        self.assertNotEqual(f["base_commit"], "old")
+
+    def test_reopening_awaiting_merge_resets_but_arch_rework_keeps(self, _a, _b):
+        self.force("arch", review_rounds=2, escalated=True)
+        self.assertEqual(self.run_cli(["set-status", "a", "coding"])[0], 0)
+        f = self.feat()
+        self.assertEqual((f["review_rounds"], f["escalated"]), (2, True))
+        self.force("awaiting_merge", review_rounds=2, escalated=True, metrics={"prod_lines": 9})
+        self.assertEqual(self.run_cli(["set-status", "a", "coding"])[0], 0)
+        f = self.feat()
+        self.assertEqual((f["status"], f["review_rounds"], f["escalated"]), ("coding", 0, False))
+        self.assertNotIn("metrics", f)
+
+    def test_non_numeric_review_rounds_does_not_crash_the_handoff(self, _a, _b):
+        for bad in ("two", None, -3, True, 1.5):
+            self.force("review", review_rounds=bad)
+            self.assertFalse(planlib.review_cap_reached(self.dir, "a"))
+            code, _, err = self.send("reviewer", "coder", verdict="fail")
+            self.assertEqual(code, 0, (bad, err))
+            self.assertEqual(self.feat()["review_rounds"], 1)
+
+    def test_validate_flags_bad_runtime_fields(self, _a, _b):
+        plan = make_plan([feature("a", review_rounds="x", base_commit=5, metrics=[1])])
+        write_plan(self.dir, plan)
+        errors, _ = planlib.validate(plan, self.dir)
+        text = " ".join(errors)
+        for field in ("review_rounds", "base_commit", "metrics"):
+            self.assertIn(field, text)
+        plan = make_plan([feature("a", review_rounds=-1)])
+        self.assertTrue(any("review_rounds" in e for e in planlib.validate(plan, self.dir)[0]))
+
+    def test_approve_resets_pre_seeded_runtime_fields(self, _a, _b):
+        plan = make_plan([feature("a", review_rounds=9, escalated=True, metrics={"x": 1}, base_commit="zzz")], status="draft")
+        write_plan(self.dir, plan)
+        planlib.approve(self.dir, "2026-01-01T00:00:00Z")
+        f = self.feat()
+        self.assertEqual((f["review_rounds"], f["escalated"]), (0, False))
+        self.assertNotIn("metrics", f)
+        self.assertNotIn("base_commit", f)
+
+    def test_hung_git_times_out_and_skips_metrics(self, _a, _b):
+        boom = subprocess.TimeoutExpired(["git"], 30)
+        with mock.patch.object(planlib.subprocess, "run", side_effect=boom) as run:
+            self.assertIsNone(planlib.compute_metrics("a", "b", []))
+        self.assertEqual(run.call_args.kwargs.get("timeout"), 30)
+        with mock.patch.object(planlib.subprocess, "run", side_effect=OSError("nope")):
+            self.assertIsNone(planlib.compute_metrics("a", "b", []))
+
+    def test_metrics_crash_never_blocks_the_coder_handoff_and_clears_stale(self, _a, _b):
+        self.send("specifier", "coder")
+        self.force("coding", metrics={"prod_lines": 999, "files_total": 1, "outside_allowed": []})
+        with mock.patch.object(planlib, "compute_metrics", side_effect=RuntimeError("boom")):
+            code, _, err = self.send("coder", "reviewer")
+        self.assertEqual(code, 0, err)
+        self.assertIn("Plan check skipped", err)
+        f = self.feat()
+        self.assertEqual(f["status"], "review")
+        self.assertNotIn("metrics", f)
+
+    def test_reviewer_note_to_several_recipients_is_accepted(self, _a, _b):
+        self.force("review")
+        code, _, err = self.send("reviewer", "coder,architect", type_="note")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.feat()["status"], "review")
+        self.assertEqual(self.send("reviewer", "coder,architect", verdict="fail")[0], 2)
+
+    def test_glob_and_noise_helpers(self, _a, _b):
+        self.assertEqual(planlib.outside_allowed(["src/a/b/c.py", "lib/z.py"], ["src/a/**"]), ["lib/z.py"])
+        self.assertEqual(planlib.outside_allowed(["src/a/c.py"], ["src/a"]), [])
+        self.assertEqual(planlib.outside_allowed(["x/y.py"], []), [])
+        self.assertEqual(planlib.outside_allowed(["a/b/c.py", "c.py"], ["**/c.py"]), [])
+        for noise in ("tests/a.py", "pkg/test_a.py", "a_test.go", "a.spec.ts", "yarn.lock", "docs/x.md"):
+            self.assertTrue(planlib.is_non_production(noise), noise)
+        self.assertFalse(planlib.is_non_production("src/docs/x.md"))
+        self.assertFalse(planlib.is_non_production("src/a.py"))
 
 
 if __name__ == "__main__":

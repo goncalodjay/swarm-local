@@ -18,6 +18,7 @@ to: <role>[,<role>...]
 priority: NN
 task: <short-stable-task-name>
 commit: <10-char-commit-abbrev>
+verdict: pass|fail          (reviewer only, required: pass -> architect, fail -> coder)
 
 type: note
 to: <role>[,<role>...]
@@ -34,8 +35,8 @@ USAGE = USAGE_TEXT
 # Cycle routing table. Each role may only hand off to its allowed recipients.
 # specifier -> coder            (one approved feature of the plan, see plan.py)
 # coder     -> reviewer         (every change, whoever sent the work)
-# reviewer  -> coder            (rework)
-#           -> architect        (always, when the review passes)
+# reviewer  -> coder            (verdict fail: rework)
+#           -> architect        (verdict pass, or fail once the review round cap is hit)
 # architect -> coder            (adjustments)
 #           -> specifier        (feature complete)
 ROLE_ROUTES = {
@@ -45,13 +46,17 @@ ROLE_ROUTES = {
     "architect": frozenset({"coder", "specifier"}),
 }
 
-# Recipients a single handoff may never combine; none in the current cycle.
-EXCLUSIVE_FORWARDS = {}
+# Recipients a single git_handoff may never combine: each of these roles forwards
+# to exactly one next role per git_handoff, so the feature status move is unambiguous.
+EXCLUSIVE_FORWARDS = {
+    "reviewer": frozenset({"coder", "architect"}),
+    "architect": frozenset({"coder", "specifier"}),
+}
 
 KNOWN_CYCLE_ROLES = frozenset(ROLE_ROUTES)
 
 
-def validate_route(sender, recipients):
+def validate_route(sender, recipients, type_=None):
     """Reject handoffs that leave the cycle defined by ROLE_ROUTES.
 
     Roles outside the standard cycle are not constrained, so projects that add
@@ -71,7 +76,9 @@ def validate_route(sender, recipients):
                 f"Role '{sender}' may not hand off to '{r}'; "
                 f"allowed recipients are {', '.join(sorted(allowed))}."
             )
-    exclusive = EXCLUSIVE_FORWARDS.get(sender, frozenset())
+    # Only a git_handoff moves a feature status, so only it must be unambiguous;
+    # a note may go to several recipients (e.g. a reviewer note to coder and architect).
+    exclusive = EXCLUSIVE_FORWARDS.get(sender, frozenset()) if type_ == "git_handoff" else frozenset()
     chosen = exclusive.intersection(recipients)
     if len(chosen) > 1:
         errors.append(
@@ -137,11 +144,46 @@ _VALID_BY_TYPE = {
     ("git_handoff", "priority"),
     ("git_handoff", "task"),
     ("git_handoff", "commit"),
+    ("git_handoff", "verdict"),
     ("note", "type"),
     ("note", "to"),
     ("note", "priority"),
     ("note", "message"),
 }
+
+
+def _verdict_errors(sender, type_, verdict, recipients, task, plan_dir, route_broken):
+    """Reviewer verdict: required on its git_handoffs and it decides the route.
+    pass -> architect only; fail -> coder only, except once the plan's review
+    round cap is reached: then the failure is escalated to the architect only."""
+    if sender != "reviewer" or type_ != "git_handoff":
+        if verdict and sender is not None and type_ == "git_handoff":
+            return ["Header 'verdict' is only allowed on a git_handoff sent by the reviewer."]
+        return []
+    if not verdict:
+        return [
+            "Missing required header 'verdict' for a reviewer git_handoff: use 'verdict: pass' "
+            "(review passed, send to the architect) or 'verdict: fail' (rework, send to the coder)."
+        ]
+    if verdict not in ("pass", "fail"):
+        return [f"Header 'verdict' must be pass or fail; got '{verdict}'."]
+    if not recipients or route_broken:
+        return []
+    if verdict == "pass":
+        expected, why = "architect", (
+            "verdict 'pass' must be sent to the architect only (a passing review always goes "
+            "to the architect, never to the coder or the specifier)"
+        )
+    elif planlib.review_cap_reached(plan_dir or planlib.locate_plan_dir(), task):
+        expected, why = "architect", (
+            "the review round cap for this feature is reached, so a failing review is escalated: "
+            "send it to the architect only, not back to the coder"
+        )
+    else:
+        expected, why = "coder", "verdict 'fail' must be sent to the coder only (rework)"
+    if recipients != [expected]:
+        return [f"Invalid reviewer route: {why}; got '{','.join(recipients)}'."]
+    return []
 
 
 def validate(headers, ordered, sender=None, plan_dir=None):
@@ -151,6 +193,7 @@ def validate(headers, ordered, sender=None, plan_dir=None):
     commit = headers.get("commit", "")
     task_name = headers.get("task", "")
     note_message = headers.get("message", "")
+    verdict = headers.get("verdict", "")
 
     recipients, recipient_errors = validate_recipients(to)
 
@@ -219,7 +262,11 @@ def validate(headers, ordered, sender=None, plan_dir=None):
     if type_ != "note" and note_message:
         note_errors.append("Header 'message' is only allowed for note.")
 
-    route_errors = validate_route(sender, recipients) if sender else []
+    route_errors = validate_route(sender, recipients, type_) if sender else []
+
+    verdict_errors = _verdict_errors(
+        sender, type_, verdict, recipients, task_name, plan_dir, bool(route_errors)
+    )
 
     # Specifier -> coder work must be exactly one approved, ready feature.
     plan_errors = []
@@ -227,6 +274,10 @@ def validate(headers, ordered, sender=None, plan_dir=None):
         plan_errors = planlib.check_specifier_to_coder(
             plan_dir or planlib.locate_plan_dir(), task_name
         )
+
+    # A note from the specifier to the coder must not start work outside the plan.
+    if sender == "specifier" and type_ == "note" and "coder" in recipients:
+        plan_errors = planlib.note_to_coder_errors(plan_dir or planlib.locate_plan_dir())
 
     return {
         "recipients": recipients,
@@ -238,6 +289,7 @@ def validate(headers, ordered, sender=None, plan_dir=None):
             + git_errors
             + note_errors
             + route_errors
+            + verdict_errors
             + plan_errors
         ),
     }

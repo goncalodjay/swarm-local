@@ -50,6 +50,7 @@ Write these files under `.swarmforge/plan/` (the master checkout's project root,
 
 Rules for `plan.json`:
 - Always write the plan as `"status": "draft"`; every feature starts `pending`. Never set `approved` yourself and never edit statuses by hand afterwards: the user approves the plan, and the swarm moves the statuses.
+- Optional plan field `"max_review_rounds"` (integer >= 1, default 3): how many times the reviewer may send a feature back to the coder before the failure is escalated to the architect.
 - Feature `id` is a slug (lowercase letters, digits, hyphens). It is also the `task:` header of the handoff.
 - `acceptance` must be non-empty, testable and observable.
 - Run `swarm plan validate` after writing. Fix every error. Warnings (size) are advisory.
@@ -90,7 +91,7 @@ A handoff arriving from the architect means the feature is DONE and ready for th
 6. Wait for the user. Only when the user explicitly says the review is fine:
    - Build the commit for the feature branch without documentation artifacts: unstage and leave out `features/*.spec.md`, `features/*.brief.md`, `features/*.feature`, handoff `.md` files, and `.md` files under `docs/` (for example `git reset -q -- 'features/*.spec.md' 'features/*.brief.md' 'features/*.feature' 'docs/*.md'`, then commit what remains). Never add them to `.gitignore`: they must keep travelling between worktrees on the swarm's internal branches. Push only the feature branch, without those files, to the project's remote. Never push to the base branch and never force-push.
    - Open the pull request into the project's base branch, titled with the feature and describing what it delivers. If there is no remote or PR tool, skip the push and PR and say so.
-7. After the feature is merged, tell the user to run `swarm plan set-status <feature-id> merged` in their own terminal (a temporary manual step; it cannot be run from inside an agent). Do not hand the next feature to the coder until the plan shows the feature as `merged`.
+7. After the feature is merged, tell the user to run `swarm plan set-status <feature-id> merged` in their own terminal (a temporary manual step until merge detection is automated; it cannot be run from inside an agent). Every other status already moves automatically with the handoffs (`coding`, `review`, `arch`, and `awaiting_merge` when the architect hands the feature to you); `merged` is the only one a human sets. Do not hand the next feature to the coder until the plan shows the feature as `merged`.
 8. When the feature is `merged`, hand off the next ready feature as described in "Handoff To Coder". If no feature is left, tell the user the module is complete.
 
 A completed feature never starts the next one on its own. Never commit or push merged work without the user's explicit approval after their review.

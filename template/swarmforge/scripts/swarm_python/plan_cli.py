@@ -16,7 +16,9 @@ Uso: swarm plan <comando>
   show                          muestra el plan y el contexto de cada feature
   status                        muestra el estado de cada feature
   approve                       aprueba el plan (solo lo puede hacer una persona)
-  set-status <id> <estado>      cambia el estado de una feature (manual)
+  set-status <id> <estado> [--force]
+                                cambia el estado de una feature (manual);
+                                --force permite saltos que el ciclo no permite
 """
 
 
@@ -108,18 +110,24 @@ def cmd_approve(plan_dir, env):
     return 0
 
 
-def cmd_set_status(plan_dir, feature_id, status, env):
+def cmd_set_status(plan_dir, feature_id, status, env, force=False):
     if env.get("SWARMFORGE_ROLE"):
         _err(
             "Solo una persona puede cambiar el estado de una feature: este comando "
             "no se puede ejecutar desde dentro de un agente."
         )
         return 3
-    # Temporary manual step: until merge detection is automated (a later
-    # phase), the human marks a feature `merged` after merging its PR so the
-    # specifier can hand the next feature to the coder.
+    # Statuses move automatically with the handoffs; the only manual edge left
+    # is awaiting_merge -> merged (until merge detection is automated), plus
+    # --force for repairs. Anything else is checked against TRANSITIONS.
     try:
-        planlib.set_feature_status(plan_dir, feature_id, status)
+        planlib.set_feature_status(plan_dir, feature_id, status, force=force)
+    except planlib.TransitionError as e:
+        _err(
+            f"Cambio de estado no permitido para '{e.feature_id}': {e.current} -> {e.target} "
+            f"({e.reason}). Si estas seguro, repite el comando con --force."
+        )
+        return 1
     except planlib.PlanError as e:
         _err(str(e))
         return 1
@@ -142,7 +150,10 @@ def main(argv, plan_dir=None, env=None):
         return cmd_status(plan_dir)
     if cmd == "approve" and not rest:
         return cmd_approve(plan_dir, env)
-    if cmd == "set-status" and len(rest) == 2:
-        return cmd_set_status(plan_dir, rest[0], rest[1], env)
+    if cmd == "set-status":
+        force = "--force" in rest
+        args = [a for a in rest if a != "--force"]
+        if len(args) == 2:
+            return cmd_set_status(plan_dir, args[0], args[1], env, force=force)
     _err(USAGE)
     return 1

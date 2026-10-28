@@ -4,7 +4,7 @@ RESERVED_FIELDS = frozenset({
     "id", "from", "role", "recipient",
     "created_at", "enqueued_at", "dequeued_at", "completed_at",
 })
-ALLOWED_FIELDS = frozenset({"type", "to", "priority", "task", "commit", "message"})
+ALLOWED_FIELDS = frozenset({"type", "to", "priority", "task", "commit", "message", "verdict"})
 ALLOWED_TYPES = frozenset({"git_handoff", "note"})
 
 

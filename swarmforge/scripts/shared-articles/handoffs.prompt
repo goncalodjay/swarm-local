@@ -20,6 +20,9 @@ task: <short-stable-task-name>
 commit: <10-character-commit-abbrev>
 ```
 
+- The reviewer adds one more required header to every `git_handoff`: `verdict: pass`
+  or `verdict: fail`. No other role may send `verdict`.
+
 ## Routing Table
 The swarm is a cycle. Each role has a fixed set of allowed recipients:
 
@@ -31,9 +34,12 @@ The swarm is a cycle. Each role has a fixed set of allowed recipients:
 | architect | coder, specifier                            |
 
 - Every role may send work to the coder. The coder answers only to the reviewer.
-- When its review passes, the reviewer ALWAYS forwards to the architect, never
-  directly to the specifier, however small the change and including re-reviews
-  after rework.
+- The reviewer's route follows its verdict: `verdict: pass` goes to the architect
+  only (never directly to the specifier, however small the change and including
+  re-reviews after rework); `verdict: fail` goes to the coder only. When the
+  plan's review round cap is reached, a failing review is escalated to the
+  architect only, and the swarm rejects it if addressed to the coder.
+- The reviewer and the architect each forward a git_handoff to exactly one role (a note may go to several recipients within your row).
 - A handoff reaching the specifier from the architect means the feature is
   complete. The specifier merges into the working branch, leaves the result
   uncommitted for the user to review, and waits for the user's go-ahead.

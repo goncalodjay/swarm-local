@@ -14,6 +14,8 @@ check in this module only produces WARNINGS.
 This module is pure (no git writes, no agents); callers pass directories.
 """
 import contextlib
+import copy
+import fnmatch
 import hashlib
 import json
 import os
@@ -28,6 +30,22 @@ FEATURE_STATUSES = ("pending", "coding", "review", "arch", "awaiting_merge", "me
 # A feature in one of these statuses is between "handed to the coder" and
 # "merged"; at most one feature may be in this state at any time.
 IN_PROGRESS = ("coding", "review", "arch", "awaiting_merge")
+
+# Legal feature status moves. The swarm drives most of them from handoffs;
+# the human CLI (`swarm plan set-status`) is checked against the same table.
+# `pending` is reachable from `coding` only as a manual/rollback reset;
+# `awaiting_merge -> coding` is the human sending a reviewed feature back.
+TRANSITIONS = {
+    "pending": frozenset({"coding"}),
+    "coding": frozenset({"review", "pending"}),
+    "review": frozenset({"coding", "arch"}),
+    "arch": frozenset({"coding", "awaiting_merge"}),
+    "awaiting_merge": frozenset({"merged", "coding"}),
+    "merged": frozenset(),
+}
+# Fields the swarm writes at runtime; they never count as plan content.
+RUNTIME_FEATURE_FIELDS = ("status", "review_rounds", "escalated", "metrics", "base_commit")
+DEFAULT_MAX_REVIEW_ROUNDS = 3
 
 LINE_GUIDE = 400
 # Warn only when clearly beyond the guide, so ~400 does not become a limit.
@@ -44,6 +62,16 @@ REQUIRED_PLAN_FIELDS = ("id", "title", "status", "general_file", "features")
 
 class PlanError(Exception):
     pass
+
+
+class TransitionError(PlanError):
+    """An illegal feature status move (human CLI, without --force)."""
+
+    def __init__(self, feature_id, current, target, reason):
+        super().__init__(
+            f"Illegal status change for feature '{feature_id}': {current} -> {target} ({reason})."
+        )
+        self.feature_id, self.current, self.target, self.reason = feature_id, current, target, reason
 
 
 # --- location -------------------------------------------------------------
@@ -269,6 +297,10 @@ def validate(plan, plan_dir):
             errors.append(f"Plan is missing field '{field}'.")
     if plan.get("status") not in PLAN_STATUSES and "status" in plan:
         errors.append(f"Plan status must be one of {', '.join(PLAN_STATUSES)}; got '{plan.get('status')}'.")
+    if "max_review_rounds" in plan:
+        cap = plan["max_review_rounds"]
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+            errors.append("Plan field 'max_review_rounds' must be an integer >= 1.")
     features = plan.get("features")
     if not isinstance(features, list):
         errors.append("Plan field 'features' must be a list.")
@@ -296,6 +328,15 @@ def validate(plan, plan_dir):
                 errors.append(f"Duplicate feature id '{fid}'.")
             else:
                 seen.add(fid)
+        if "review_rounds" in f and (
+            isinstance(f["review_rounds"], bool) or not isinstance(f["review_rounds"], int)
+            or f["review_rounds"] < 0
+        ):
+            errors.append(f"Feature {label} field 'review_rounds' must be a non-negative integer.")
+        if "base_commit" in f and not isinstance(f["base_commit"], str):
+            errors.append(f"Feature {label} field 'base_commit' must be a string.")
+        if "metrics" in f and not isinstance(f["metrics"], dict):
+            errors.append(f"Feature {label} field 'metrics' must be an object.")
         if "status" in f and f["status"] not in FEATURE_STATUSES:
             errors.append(
                 f"Feature {label} has invalid status '{f['status']}'; "
@@ -494,7 +535,7 @@ def content_hash(plan_dir):
     canon = {k: v for k, v in plan.items() if k not in ("status", "approved_at")}
     raw_features = plan.get("features") if isinstance(plan.get("features"), list) else []
     canon["features"] = [
-        {k: v for k, v in f.items() if k != "status"} if isinstance(f, dict) else f
+        {k: v for k, v in f.items() if k not in RUNTIME_FEATURE_FIELDS} if isinstance(f, dict) else f
         for f in raw_features
     ]
     h = hashlib.sha256()
@@ -551,21 +592,48 @@ def approval_errors(plan_dir):
 
 # --- mutations ------------------------------------------------------------
 
-def _set_status_unlocked(plan_dir, feature_id, status):
+def _check_transition(plan, feature, target):
+    current = feature.get("status")
+    if target not in TRANSITIONS.get(current, frozenset()):
+        raise TransitionError(feature.get("id"), current, target, "not an allowed move")
+    if target in IN_PROGRESS:
+        busy = [f.get("id") for f in in_progress_features(plan) if f is not feature]
+        if busy:
+            raise TransitionError(
+                feature.get("id"), current, target,
+                f"feature '{busy[0]}' is already in progress; features are sequential",
+            )
+
+
+def reset_runtime_counters(feature):
+    """Clear the per-cycle review state of a feature."""
+    feature["review_rounds"] = 0
+    feature["escalated"] = False
+    feature.pop("metrics", None)
+
+
+def _set_status_unlocked(plan_dir, feature_id, status, force=False):
     if status not in FEATURE_STATUSES:
         raise PlanError(f"Invalid status '{status}'; allowed: {', '.join(FEATURE_STATUSES)}.")
     plan = load(plan_dir)
     feature = feature_by_id(plan, feature_id)
     if feature is None:
         raise PlanError(f"Unknown feature '{feature_id}'.")
+    if not force:
+        _check_transition(plan, feature, status)
+    if feature.get("status") == "awaiting_merge" and status == "coding":
+        # The human reopened a finished feature: a fresh review cycle starts.
+        # (arch -> coding is architect rework and keeps the lifetime counter.)
+        reset_runtime_counters(feature)
     feature["status"] = status
     save(plan_dir, plan)
     return plan
 
 
-def set_feature_status(plan_dir, feature_id, status):
+def set_feature_status(plan_dir, feature_id, status, force=False):
+    """Human status change. Illegal jumps raise TransitionError unless `force`."""
     with plan_lock(plan_dir):
-        return _set_status_unlocked(plan_dir, feature_id, status)
+        return _set_status_unlocked(plan_dir, feature_id, status, force=force)
 
 
 def mark_coding(plan_dir, feature_id):
@@ -573,15 +641,261 @@ def mark_coding(plan_dir, feature_id):
     return set_feature_status(plan_dir, feature_id, "coding")
 
 
-def reserve_feature(plan_dir, task):
+def snapshot_feature(plan_dir, feature_id):
+    """Deep copy of a feature object, used to roll a transition back."""
+    feature = feature_by_id(load(plan_dir), feature_id)
+    return copy.deepcopy(feature) if feature is not None else None
+
+
+def restore_feature(plan_dir, feature_id, snapshot):
+    """Put a feature back exactly as `snapshot` (rollback after a failed outbox write)."""
+    if snapshot is None:
+        return
+    with plan_lock(plan_dir):
+        plan = load(plan_dir)
+        for i, f in enumerate(plan.get("features", [])):
+            if isinstance(f, dict) and f.get("id") == feature_id:
+                plan["features"][i] = snapshot
+                save(plan_dir, plan)
+                return
+        raise PlanError(f"Unknown feature '{feature_id}'.")
+
+
+def reserve_feature(plan_dir, task, base_commit=None):
     """Under one lock: re-run the specifier -> coder gate, then mark the
-    feature `coding`. Returns the gate's error list (empty = reserved)."""
+    feature `coding` and record the commit the work starts from. Returns
+    (errors, snapshot); empty errors means reserved and `snapshot` is the
+    feature as it was, for rollback."""
     with plan_lock(plan_dir):
         errors = check_specifier_to_coder(plan_dir, task)
         if errors:
-            return errors
-        _set_status_unlocked(plan_dir, task, "coding")
-    return []
+            return errors, None
+        snapshot = snapshot_feature(plan_dir, task)
+        plan = _set_status_unlocked(plan_dir, task, "coding")
+        # A new feature starts with a clean review state and no stale base.
+        feature = feature_by_id(plan, task)
+        reset_runtime_counters(feature)
+        feature.pop("base_commit", None)
+        if base_commit:
+            feature["base_commit"] = base_commit
+        save(plan_dir, plan)
+    return [], snapshot
+
+
+def planned_transition(sender, recipients, verdict=None):
+    """(from_status, to_status) a validated handoff implies, or None."""
+    if len(recipients) != 1:
+        return None
+    to = recipients[0]
+    if sender == "coder" and to == "reviewer":
+        return "coding", "review"
+    if sender == "reviewer" and to == "coder" and verdict == "fail":
+        return "review", "coding"
+    if sender == "reviewer" and to == "architect" and verdict in ("pass", "fail"):
+        return "review", "arch"
+    if sender == "architect" and to == "specifier":
+        return "arch", "awaiting_merge"
+    if sender == "architect" and to == "coder":
+        return "arch", "coding"
+    return None
+
+
+class HandoffTransition:
+    """Result of applying a handoff's status move (see apply_handoff_transition)."""
+
+    def __init__(self, snapshot=None, escalated=False, skipped=""):
+        self.snapshot = snapshot
+        self.escalated = escalated
+        self.skipped = skipped
+
+
+def apply_handoff_transition(plan_dir, sender, recipients, task, verdict=None, metrics=None):
+    """Move the feature named by `task` for a validated handoff, under the plan
+    lock. Returns None when the task is not a feature of the active plan
+    (legacy work: no transition, no rejection). A feature whose status is not
+    the expected source is left alone and `skipped` explains why: a drifted
+    status must not deadlock the swarm; the human fixes it with set-status.
+    """
+    move = planned_transition(sender, recipients, verdict)
+    if move is None or not task or not exists(plan_dir):
+        return None
+    with plan_lock(plan_dir):
+        plan = load(plan_dir)
+        feature = feature_by_id(plan, task)
+        if feature is None:
+            return None
+        src, dst = move
+        if feature.get("status") != src:
+            return HandoffTransition(skipped=(
+                f"feature '{task}' is '{feature.get('status')}', expected '{src}'; "
+                f"status left unchanged"
+            ))
+        snapshot = copy.deepcopy(feature)
+        escalated = False
+        if sender == "reviewer" and verdict == "fail":
+            if dst == "arch":
+                escalated = True
+                feature["escalated"] = True
+            else:
+                feature["review_rounds"] = _safe_rounds(feature) + 1
+        if sender == "coder" and dst == "review":
+            # Stale metrics must not outlive a skipped computation.
+            if metrics is not None:
+                feature["metrics"] = metrics
+            else:
+                feature.pop("metrics", None)
+        feature["status"] = dst
+        save(plan_dir, plan)
+    return HandoffTransition(snapshot=snapshot, escalated=escalated)
+
+
+def _safe_rounds(feature):
+    rounds = feature.get("review_rounds", 0)
+    if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
+        return 0
+    return rounds
+
+
+def max_review_rounds(plan):
+    cap = plan.get("max_review_rounds") if isinstance(plan, dict) else None
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        return DEFAULT_MAX_REVIEW_ROUNDS
+    return cap
+
+
+def review_cap_reached(plan_dir, task):
+    """True when `task` is a feature whose review_rounds reached the plan cap.
+    Anything unreadable or non-feature answers False."""
+    try:
+        if not task or not exists(plan_dir):
+            return False
+        plan = load(plan_dir)
+        feature = feature_by_id(plan, task)
+        if feature is None:
+            return False
+        return _safe_rounds(feature) >= max_review_rounds(plan)
+    except PlanError:
+        return False
+
+
+def note_to_coder_errors(plan_dir):
+    """A specifier -> coder `note` is only legitimate while a feature is in
+    progress; otherwise it would start work outside the approved plan."""
+    if not exists(plan_dir):
+        return []
+    try:
+        plan = load(plan_dir)
+    except PlanError as e:
+        return [str(e)]
+    if any(f.get("status") in ("coding", "review", "arch") for f in _features(plan)):
+        return []
+    return [
+        "A 'note' from the specifier to the coder is only accepted while a plan feature is "
+        "in progress (coding, review or arch). Work starts only through an approved plan "
+        "feature handoff: send a git_handoff whose task is the next ready feature id."
+    ]
+
+
+# --- advisory metrics ---------------------------------------------------------
+
+LOCKFILES = frozenset({
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock",
+    "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "composer.lock", "go.sum",
+})
+
+
+def is_non_production(path):
+    """Tests, lockfiles and docs markdown do not count as production lines."""
+    parts = path.replace("\\", "/").split("/")
+    name = parts[-1]
+    if any(p in ("tests", "__tests__") for p in parts[:-1]):
+        return True
+    if (name.startswith("test_") or fnmatch.fnmatch(name, "*_test.*")
+            or fnmatch.fnmatch(name, "*.spec.*") or fnmatch.fnmatch(name, "*.test.*")):
+        return True
+    if name in LOCKFILES or name.endswith(".lock"):
+        return True
+    return parts[0] == "docs" and name.endswith(".md")
+
+
+def _glob_regex(pattern):
+    pattern = pattern.replace("\\", "/")
+    if pattern.startswith("./"):
+        pattern = pattern[2:]
+    out, i = [], 0
+    while i < len(pattern):
+        c = pattern[i]
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif c == "*":
+            out.append("[^/]*")
+            i += 1
+        elif c == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(c))
+            i += 1
+    # A bare directory (`src/feature`) also covers everything below it.
+    return re.compile("".join(out) + "(?:/.*)?")
+
+
+def outside_allowed(paths, allowed_globs):
+    """Files in `paths` matched by none of `allowed_globs` (empty = unrestricted)."""
+    if not allowed_globs:
+        return []
+    regexes = [_glob_regex(g) for g in allowed_globs]
+    return [p for p in paths if not any(r.fullmatch(p) for r in regexes)]
+
+
+def compute_metrics(base, commit, allowed_globs, cwd=None):
+    """Advisory size/scope numbers for base..commit, or None when git fails.
+    Never raises; callers must treat the result as a warning only."""
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--numstat", "--no-renames", "-z", base, commit],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(cwd) if cwd else None, timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError):  # includes TimeoutExpired
+        return None
+    if r.returncode != 0:
+        return None
+    prod_lines, files = 0, []
+    for entry in r.stdout.split("\0"):
+        parts = entry.strip("\n").split("\t", 2)
+        if len(parts) != 3:
+            continue
+        added, removed, path = parts
+        files.append(path)
+        if is_non_production(path):
+            continue
+        if added.isdigit() and removed.isdigit():  # binary files show "-"
+            prod_lines += int(added) + int(removed)
+    scoped = [p for p in files if not is_non_production(p)]
+    return {
+        "prod_lines": prod_lines,
+        "files_total": len(files),
+        "outside_allowed": outside_allowed(scoped, allowed_globs or []),
+    }
+
+
+def plan_check_text(metrics):
+    """One short advisory block for the reviewer (and the coder's stderr)."""
+    lines = metrics["prod_lines"]
+    head = f"~{lines} prod lines (target ~{LINE_GUIDE}"
+    head += ", over target)" if lines > LINE_GUIDE else ")"
+    outside = metrics.get("outside_allowed") or []
+    if outside:
+        shown = ", ".join(outside[:10]) + (f" (+{len(outside) - 10} more)" if len(outside) > 10 else "")
+        scope = f"{len(outside)} file(s) outside allowed_paths: {shown}"
+    else:
+        scope = "all production files inside allowed_paths"
+    return f"Plan check: {head}; {scope}. Advisory only."
 
 
 def approve(plan_dir, now_iso):
@@ -589,6 +903,11 @@ def approve(plan_dir, now_iso):
         plan = load(plan_dir)
         plan["status"] = "approved"
         plan["approved_at"] = now_iso
+        for f in _features(plan):
+            # Runtime state is written only by the swarm; never let a
+            # pre-seeded value ride through approval.
+            reset_runtime_counters(f)
+            f.pop("base_commit", None)
         save(plan_dir, plan)
         record_approval(plan_dir, now_iso)
     return plan

@@ -211,8 +211,8 @@ El swarm trabaja por ciclos completos de feature, no por idas y vueltas pequeña
 ```
 specifier --una feature del plan---> coder
 coder     --cada cambio-------------> reviewer
-reviewer  --retrabajo---------------> coder
-reviewer  --revisión aprobada-------> architect   (siempre)
+reviewer  --verdict: fail-----------> coder       (retrabajo; con el tope de rondas escala al architect)
+reviewer  --verdict: pass-----------> architect   (siempre)
 architect --ajustes-----------------> coder       (vuelve por el reviewer)
 architect --arquitectura sana-------> specifier   (feature completa)
 specifier: merge sin commit ni push, espera revisión del usuario
@@ -220,7 +220,7 @@ specifier: merge sin commit ni push, espera revisión del usuario
 
 - **specifier**: entrevista al usuario pregunta por pregunta y divide el módulo en features secuenciales de ~400 líneas de código de producción (ver "Plan de features").
 - **coder**: recibe de cualquier rol, implementa la feature que recibe (más la visión general del plan) con TDD y entrega siempre al reviewer.
-- **reviewer**: revisa contra la especificación como base absoluta, ejecuta los tests, se conecta a APIs y bases reales, cubre lo que falte, y reenvía siempre al architect.
+- **reviewer**: revisa contra la especificación como base absoluta, ejecuta los tests, se conecta a APIs y bases reales, cubre lo que falte, y reenvía al architect cuando la revisión pasa. Todo `git_handoff` del reviewer lleva el header obligatorio `verdict: pass|fail` y el ruteo sale de ahí: `pass` va solo al architect, `fail` va solo al coder (salvo al llegar al tope de rondas, ver abajo).
 - **architect**: revisa la arquitectura completa, código muerto y ubicación de archivos; manda ajustes al coder o la señal de cierre al specifier.
 
 El ruteo no es solo una convención de prompts: `swarm_handoff.sh` rechaza los handoffs que salen del ciclo.
@@ -235,6 +235,23 @@ El specifier no entrega el módulo entero: lo divide en features **secuenciales*
 4. El coder ve la visión general más solo el slice de su feature; nunca las demás.
 5. Cuando una feature se mergea, marca el estado a mano (paso temporal hasta automatizarlo): `./swarm plan set-status <id> merged`. Solo entonces el specifier puede entregar la siguiente.
 
+Los estados se mueven solos con los handoffs de la feature (solo para tareas cuyo `task:` es el id de una feature del plan; el trabajo fuera del plan no se toca):
+
+| Handoff | Cambio de estado |
+| --- | --- |
+| specifier -> coder | `pending` -> `coding` (guarda el `base_commit`) |
+| coder -> reviewer | `coding` -> `review` |
+| reviewer (`fail`) -> coder | `review` -> `coding` y `review_rounds` + 1 |
+| reviewer (`pass`) -> architect | `review` -> `arch` |
+| architect -> coder (ajustes) | `arch` -> `coding` |
+| architect -> specifier | `arch` -> `awaiting_merge` |
+| tú: `set-status <id> merged` | `awaiting_merge` -> `merged` (único paso manual) |
+
+- **Tope de rondas de revisión**: `plan.json` acepta `max_review_rounds` (entero >= 1, por defecto 3). Al alcanzarlo, un `verdict: fail` ya no vuelve al coder: el swarm lo acepta solo si va al architect, marca la feature con `escalated: true` y el architect decide si corrige los defectos restantes o los acepta y los informa al specifier. El contador se reinicia al reservar la feature y cuando una feature `awaiting_merge` se reabre a `coding`; el retrabajo `arch` -> `coding` lo conserva.
+- **Métricas informativas**: en coder -> reviewer el swarm calcula con git las líneas de producción cambiadas (sin tests, lockfiles ni `docs/*.md`) y los archivos fuera de `allowed_paths`, las guarda en `feature.metrics`, las muestra en el stderr del coder y las agrega al handoff del reviewer como bloque `Plan check:`. Son solo advertencias: nunca rechazan un handoff ni cortan el trabajo del coder.
+- Mientras exista un plan, un `note` del specifier al coder solo se acepta si hay una feature en curso (`coding`, `review` o `arch`); el trabajo nuevo solo entra por el handoff de una feature aprobada.
+- `set-status` valida los saltos contra la tabla de arriba (y que no haya dos features en curso); para reparar un estado a mano usa `--force`.
+
 Comandos (se ejecutan desde la raíz del proyecto o desde cualquier worktree; el plan siempre se lee del checkout principal):
 
 | Comando | Qué hace |
@@ -243,7 +260,7 @@ Comandos (se ejecutan desde la raíz del proyecto o desde cualquier worktree; el
 | `./swarm plan show` | Muestra el plan completo. |
 | `./swarm plan status` | Estado de cada feature y cuál es la próxima lista. |
 | `./swarm plan approve` | Valida y aprueba el plan. Solo lo puede ejecutar una persona. |
-| `./swarm plan set-status <id> <estado>` | Cambia el estado de una feature (`pending`, `coding`, `review`, `arch`, `awaiting_merge`, `merged`). Solo una persona. |
+| `./swarm plan set-status <id> <estado> [--force]` | Cambia el estado de una feature (`pending`, `coding`, `review`, `arch`, `awaiting_merge`, `merged`). Rechaza saltos ilegales (p. ej. `pending` -> `merged`) salvo con `--force`. Solo una persona. |
 
 ## Memoria compartida (engram)
 

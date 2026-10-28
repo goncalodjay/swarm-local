@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import os
+import subprocess
 
 from swarm_python import plan as planlib
 from swarm_python.handoff.format import parse_draft
@@ -24,6 +25,7 @@ to: <role>[,<role>...]
 priority: NN
 task: <short-stable-task-name>
 commit: <10-char-commit-abbrev>
+verdict: pass|fail          (reviewer only, required)
 
 type: note
 to: <role>[,<role>...]
@@ -90,6 +92,8 @@ def write_handoff(headers, recipients, canonical_commit, sender, extra_body=""):
         lines.append(f"role: {sender}")
         lines.append(f"task: {headers.get('task', '')}")
         lines.append(f"commit: {canonical_commit}")
+        if headers.get("verdict"):
+            lines.append(f"verdict: {headers['verdict']}")
     elif type_ == "note":
         lines.append(f"message: {headers.get('message', '')}")
 
@@ -110,7 +114,7 @@ def _is_feature_handoff(sender, headers, recipients):
             and "coder" in recipients)
 
 
-def _loud_transition_failure(task, why):
+def _loud_transition_failure(task, why, fix):
     bar = "!" * 72
     print(bar, file=sys.stderr)
     print(
@@ -119,16 +123,24 @@ def _loud_transition_failure(task, why):
         file=sys.stderr,
     )
     print(
-        f"Specifier / human: run `swarm plan set-status {task} coding` NOW, otherwise the "
-        "same feature can be handed off twice.",
+        f"Specifier / human: run `{fix}` NOW, otherwise the plan status will be wrong.",
         file=sys.stderr,
     )
     print(bar, file=sys.stderr)
 
 
-def mark_feature_coding(sender, headers, recipients):
+def _head_commit():
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    except OSError:
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def mark_feature_coding(sender, headers, recipients, fallback_commit=None):
     """Reserve the handed-off feature: re-check the gate and move it to
-    `coding` under the plan lock. Returns (marked, errors).
+    `coding` under the plan lock, recording the base commit. Returns
+    (snapshot, errors); `snapshot` is None when nothing was reserved.
 
     Ordering (validate -> mark coding -> write outbox -> remove draft) is the
     safest of the options: if the process dies after marking but before the
@@ -142,25 +154,92 @@ def mark_feature_coding(sender, headers, recipients):
     failure is reported loudly.
     """
     if not _is_feature_handoff(sender, headers, recipients):
-        return False, []
+        return None, []
     task = headers.get("task", "")
+    base = _head_commit() or fallback_commit
     try:
-        errors = planlib.reserve_feature(planlib.locate_plan_dir(), task)
+        errors, snapshot = planlib.reserve_feature(planlib.locate_plan_dir(), task, base)
     except (planlib.PlanError, OSError) as e:
-        _loud_transition_failure(task, e)
-        return False, []
-    return (not errors), errors
+        _loud_transition_failure(task, e, f"swarm plan set-status {task} coding")
+        return None, []
+    return snapshot, errors
 
 
-def unmark_feature(headers):
-    """Roll a reserved feature back to `pending` after the outbox write failed."""
+def _coder_metrics(plan_dir, task, commit):
+    """Advisory size/scope numbers for coder -> reviewer, or None (stderr note)."""
+    try:
+        feature = planlib.feature_by_id(planlib.load(plan_dir), task)
+    except planlib.PlanError:
+        return None
+    if feature is None:
+        return None
+    base = feature.get("base_commit")
+    if not base or not commit:
+        print("Plan check skipped: no base commit recorded for this feature.", file=sys.stderr)
+        return None
+    metrics = planlib.compute_metrics(base, commit, feature.get("allowed_paths") or [])
+    if metrics is None:
+        print("Plan check skipped: git could not compute the diff.", file=sys.stderr)
+    return metrics
+
+
+ESCALATION_TEXT = (
+    "ESCALATION: the review round cap was reached and the reviewer still reports defects "
+    "(verdict fail). The feature is NOT going back to the coder. Either fix the remaining "
+    "defects yourself with minimal, contained changes, or accept them and list them in your "
+    "report to the specifier."
+)
+
+
+def apply_feature_transition(sender, headers, recipients, canonical_commit, extra_body):
+    """Status move for coder/reviewer/architect handoffs of a plan feature.
+    Returns (transition, extra_body); transition is None for legacy tasks.
+    Same ordering and rollback as the reservation: transition first, outbox
+    second, snapshot restored if the outbox write fails."""
+    task = headers.get("task", "")
+    if headers.get("type") != "git_handoff" or not task:
+        return None, extra_body
+    plan_dir = planlib.locate_plan_dir()
+    metrics = None
+    if sender == "coder" and recipients == ["reviewer"] and planlib.exists(plan_dir):
+        try:
+            metrics = _coder_metrics(plan_dir, task, canonical_commit)
+        except Exception as e:  # advisory only: never block the handoff
+            print(f"Plan check skipped: {e}", file=sys.stderr)
+            metrics = None
+    try:
+        transition = planlib.apply_handoff_transition(
+            plan_dir, sender, recipients, task, headers.get("verdict"), metrics,
+        )
+    except (planlib.PlanError, OSError) as e:
+        move = planlib.planned_transition(sender, recipients, headers.get("verdict"))
+        target = move[1] if move else "<status>"
+        _loud_transition_failure(task, e, f"swarm plan set-status {task} {target} --force")
+        return None, extra_body
+    if transition is None:
+        return None, extra_body
+    if transition.skipped:
+        print(f"Plan status note: {transition.skipped}.", file=sys.stderr)
+    elif metrics is not None:
+        check = planlib.plan_check_text(metrics)
+        print(check, file=sys.stderr)
+        extra_body = f"{extra_body}\n\n{check}" if extra_body else check
+    if transition.escalated:
+        # The architect prompt says the body STARTS with ESCALATION: lead with it.
+        extra_body = f"{ESCALATION_TEXT}\n\n{extra_body}" if extra_body else ESCALATION_TEXT
+    return transition, extra_body
+
+
+def rollback_feature(headers, snapshot):
+    """Restore a feature to its pre-transition state after the outbox write failed."""
     task = headers.get("task", "")
     try:
-        planlib.set_feature_status(planlib.locate_plan_dir(), task, "pending")
+        planlib.restore_feature(planlib.locate_plan_dir(), task, snapshot)
     except (planlib.PlanError, OSError) as e:
         print(
             f"WARNING: the handoff failed and feature '{task}' could not be rolled back "
-            f"({e}). Run `swarm plan set-status {task} pending`.",
+            f"({e}). Check it with `swarm plan status` and fix it with "
+            f"`swarm plan set-status {task} <status> --force`.",
             file=sys.stderr,
         )
 
@@ -186,21 +265,30 @@ def main():
         error_report(draft, all_errors)
         sys.exit(2)
 
-    marked, gate_errors = mark_feature_coding(sender, parsed["headers"], validation["recipients"])
+    snapshot, gate_errors = mark_feature_coding(
+        sender, parsed["headers"], validation["recipients"], validation["canonical-commit"],
+    )
     if gate_errors:
         error_report(draft, gate_errors)
         sys.exit(2)
+    body = parsed["body"]
+    if snapshot is None:
+        transition, body = apply_feature_transition(
+            sender, parsed["headers"], validation["recipients"],
+            validation["canonical-commit"], body,
+        )
+        snapshot = transition.snapshot if transition else None
     try:
         outbox_file = write_handoff(
             parsed["headers"],
             validation["recipients"],
             validation["canonical-commit"],
             sender,
-            parsed["body"],
+            body,
         )
     except BaseException:
-        if marked:
-            unmark_feature(parsed["headers"])
+        if snapshot is not None:
+            rollback_feature(parsed["headers"], snapshot)
         raise
     draft.unlink()
     print(f"HANDOFF QUEUED: {outbox_file}")
