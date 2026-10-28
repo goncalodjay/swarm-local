@@ -1,6 +1,9 @@
 agent	provider	provider_label	model_id	model_label
 claude	anthropic	Anthropic	claude-sonnet-4	Claude Sonnet 4
 claude	anthropic	Anthropic	claude-opus-4	Claude Opus 4
+claude	anthropic	Anthropic	opus	Claude Opus (latest alias)
+claude	anthropic	Anthropic	sonnet	Claude Sonnet (latest alias)
+claude	anthropic	Anthropic	haiku	Claude Haiku (latest alias)
 codex	openai	OpenAI	gpt-5.6-luna	GPT-5.6 Luna
 codex	openai	OpenAI	gpt-5.4-mini	GPT-5.4 Mini
 codex	openai	OpenAI	o4-mini	O4 Mini
@@ -30,3 +33,7 @@ hermes	deepseek	DeepSeek	deepseek-chat	DeepSeek Chat
 hermes	xai	xAI	grok-3	Grok 3
 hermes	local	Local / Ollama	llama-3.1-8b	Local — Llama 3.1 8B
 hermes	local	Local / Ollama	qwen2.5-7b	Local — Qwen2.5 7B
+kiro-cli	kiro	Kiro (AWS)	auto	Auto
+kiro-cli	kiro	Kiro (AWS)	claude-sonnet-4.5	Claude Sonnet 4.5
+kiro-cli	kiro	Kiro (AWS)	claude-opus-4.5	Claude Opus 4.5
+kiro-cli	kiro	Kiro (AWS)	claude-haiku-4.5	Claude Haiku 4.5
