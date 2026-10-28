@@ -12,11 +12,11 @@ def header_field(path: Path, field: str):
     prefix = f"{field}: "
     with path.open("r", encoding="utf-8") as f:
         for line in f:
-            line = line.rstrip("\n")
+            line = line.strip()  # also drops the \r of CRLF drafts
             if not line:
                 return None
             if line.startswith(prefix):
-                return line[len(prefix):]
+                return line[len(prefix):].strip()
     return None
 
 

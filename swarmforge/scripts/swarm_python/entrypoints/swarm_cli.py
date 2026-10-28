@@ -270,6 +270,11 @@ def run_tui(root: str):
     print(f"{GREEN}Starting SwarmForge TUI in {RESET}{root}")
     os.chdir(str(root))
     # The TUI is a self-contained binary; it needs no interpreter on PATH.
+    if os.name == "nt":
+        # os.execv does not replace the process on Windows: this interpreter
+        # exits at once, the calling shell gets its prompt back, and the shell
+        # then competes with the TUI for console input. Wait for the TUI.
+        sys.exit(subprocess.run([str(tui_bundle)]).returncode)
     os.execv(str(tui_bundle), [str(tui_bundle)])
 
 
@@ -317,6 +322,9 @@ def main():
     cmd = args[0]
     if cmd == "tui":
         run_tui(args[1] if len(args) > 1 else cwd)
+    elif cmd == "plan":
+        from swarm_python import plan_cli
+        sys.exit(plan_cli.main(args[1:]))
     elif cmd == "stop":
         stop_swarm(args[1] if len(args) > 1 else cwd)
     elif cmd == "--no-tui":

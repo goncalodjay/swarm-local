@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from .format import ALLOWED_TYPES, RESERVED_FIELDS, ALLOWED_FIELDS
+from .. import plan as planlib
 from .roles import role_known
 from .timefmt import now_iso
 
@@ -31,7 +32,7 @@ USAGE = USAGE_TEXT
 
 
 # Cycle routing table. Each role may only hand off to its allowed recipients.
-# specifier -> coder            (whole phased spec)
+# specifier -> coder            (one approved feature of the plan, see plan.py)
 # coder     -> reviewer         (every change, whoever sent the work)
 # reviewer  -> coder            (rework)
 #           -> architect        (always, when the review passes)
@@ -143,7 +144,7 @@ _VALID_BY_TYPE = {
 }
 
 
-def validate(headers, ordered, sender=None):
+def validate(headers, ordered, sender=None, plan_dir=None):
     type_ = headers.get("type", "")
     to = headers.get("to", "")
     priority = headers.get("priority", "")
@@ -220,6 +221,13 @@ def validate(headers, ordered, sender=None):
 
     route_errors = validate_route(sender, recipients) if sender else []
 
+    # Specifier -> coder work must be exactly one approved, ready feature.
+    plan_errors = []
+    if sender == "specifier" and type_ == "git_handoff" and "coder" in recipients:
+        plan_errors = planlib.check_specifier_to_coder(
+            plan_dir or planlib.locate_plan_dir(), task_name
+        )
+
     return {
         "recipients": recipients,
         "canonical-commit": canonical,
@@ -230,6 +238,7 @@ def validate(headers, ordered, sender=None):
             + git_errors
             + note_errors
             + route_errors
+            + plan_errors
         ),
     }
 
