@@ -2,4 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$SCRIPT_DIR/swarm_python/entrypoints/done_with_current.py" "$@"
+. "$SCRIPT_DIR/lib/python.sh"
+find_python || { echo "Python 3 is required (>= 3.10)." >&2; exit 1; }
+exec "$PYTHON" "$SCRIPT_DIR/swarm_python/entrypoints/done_with_current.py" "$@"

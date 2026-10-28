@@ -8,7 +8,9 @@ Backends whose resume path is known pick the session identity up front, so
 nothing has to be scraped from their output afterwards:
   claude   --session-id <uuid> to create, --resume <uuid> to continue
   pi       --session-id <id> creates it if missing and continues it after
-  hermes   --continue <name> --create-if-missing does both
+  hermes   owns the session identity: a fresh launch creates it with the
+           run's route and a resume continues the worktree's own session
+           (`--in` scopes hermes' lookup to that worktree)
 
 Every other backend is launched fresh each time, as before.
 """
@@ -35,8 +37,9 @@ def supports_resume(agent: str) -> bool:
 
 def new_session_id(agent: str, role: str, task: str) -> str:
     if agent == "hermes":
-        # hermes resolves --continue by session title, so make it readable
-        # and unique per session.
+        # Hermes picks the session itself (the worktree's latest), so this id
+        # is only a marker in the swarm state: it tells a fresh launch from a
+        # resume of the same feature. Keep it readable for the state file.
         slug = task or "start"
         return f"swarmforge-{role}-{slug}-{uuid.uuid4().hex[:8]}"
     return str(uuid.uuid4())
