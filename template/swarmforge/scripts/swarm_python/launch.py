@@ -89,6 +89,14 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
         f"{shell_quote(str(role_tool_bin))}:$PATH && "
         f"cd {shell_quote(str(role_worktree))} && "
     )
+    if not (session is not None and session.resume):
+        # Fail loudly rather than start the agent with an empty prompt. Uses
+        # only shell builtins so it works when the pane's PATH lacks coreutils.
+        pf = shell_quote(str(prompt_file))
+        base += (
+            f"if [ ! -s {pf} ]; then "
+            f"echo \"swarmforge: prompt file missing or empty: \"{pf} >&2; exit 1; fi && "
+        )
 
     # Resolve the agent binary at launch time so the herdr pane does not
     # depend on the shell's PATH inheriting the caller's env.
@@ -97,7 +105,7 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
     resuming = session is not None and session.resume
     first_message = (
         shell_quote(RESUME_PROMPT) if resuming
-        else f'"$(cat {shell_quote(str(prompt_file))})"'
+        else f'"$(<{shell_quote(str(prompt_file))})"'
     )
 
     if agent == "claude":
@@ -118,40 +126,56 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
         agent_cmd = (
             f"{agent_bin} exec -C {shell_quote(str(role_worktree))} "
             f"{_extra_args_prefix(row)}"
-            f'"$(cat {shell_quote(str(prompt_file))})"'
+            f'"$(<{shell_quote(str(prompt_file))})"'
         )
     elif agent == "copilot":
         agent_cmd = (
             f"{agent_bin} -C {shell_quote(str(role_worktree))} "
             f"--name {shell_quote(f'SwarmForge {display}')} "
             f"{_extra_args_prefix(row)}"
-            f'-i "$(cat {shell_quote(str(prompt_file))})"'
+            f'-i "$(<{shell_quote(str(prompt_file))})"'
         )
     elif agent == "grok":
         agent_cmd = (
             f"{agent_bin} --cwd {shell_quote(str(role_worktree))} "
             f"{_grok_permission_prefix(row)}"
             f"{_extra_args_prefix(row)}"
-            f'--rules "$(cat {shell_quote(str(prompt_file))})" '
-            f'--verbatim "$(cat {shell_quote(str(prompt_file))})"'
+            f'--rules "$(<{shell_quote(str(prompt_file))})" '
+            f'--verbatim "$(<{shell_quote(str(prompt_file))})"'
         )
     elif agent == "opencode":
         agent_cmd = (
             f"{agent_bin} {_extra_args_prefix(row)}"
-            f'--prompt "$(cat {shell_quote(str(prompt_file))})"'
+            f'--prompt "$(<{shell_quote(str(prompt_file))})"'
         )
     elif agent == "hermes":
-        session_args = (
-            f"--continue {shell_quote(session.session_id)} --create-if-missing "
-            if session is not None else ""
-        )
-        query = (
-            f"-q {first_message}" if resuming
-            else f"--query-file {shell_quote(str(prompt_file))}"
-        )
+        # Hermes freezes a session's route (model, provider, reasoning) when the
+        # session is created and refuses to change it on a resume: `-c <name>
+        # --create-if-missing` creates the session with the profile defaults and
+        # then rejects the flags this run asked for ("Resume retains gateway
+        # session policy; creation overrides are unsupported on resume").
+        # So a fresh launch creates the session WITH this run's route, and a
+        # resume continues the worktree's own session (`--in` scopes the lookup
+        # to that worktree) leaving the frozen route alone.
+        if resuming:
+            agent_cmd = (
+                f"{agent_bin} chat --in {shell_quote(str(role_worktree))} "
+                f"--resume latest -q {first_message}"
+            )
+        else:
+            agent_cmd = (
+                f"{agent_bin} chat --in {shell_quote(str(role_worktree))} "
+                f"{_extra_args_prefix(row)}"
+                f"--query-file {shell_quote(str(prompt_file))}"
+            )
+    elif agent == "kiro-cli":
+        # `kiro-cli chat [INPUT]` starts an interactive session with INPUT as
+        # the first message. --model comes from the swarmforge.conf extra args
+        # (verified in `kiro-cli chat --help`). Resume is not wired up: the
+        # swarm relaunches kiro-cli fresh each time.
         agent_cmd = (
-            f"{agent_bin} chat --in {shell_quote(str(role_worktree))} "
-            f"{session_args}{_extra_args_prefix(row)}{query}"
+            f"{agent_bin} chat {_extra_args_prefix(row)}"
+            f'"$(<{shell_quote(str(prompt_file))})"'
         )
     elif agent == "pi":
         session_args = (

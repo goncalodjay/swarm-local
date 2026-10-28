@@ -320,11 +320,11 @@ class LaunchCommandTest(unittest.TestCase):
     def test_claude_creates_then_resumes_by_id(self):
         fresh = self.command("claude", SessionPlan("u-1", resume=False))
         self.assertIn("--session-id u-1 ", fresh)
-        self.assertIn('"$(cat ', fresh)
+        self.assertIn('"$(<', fresh)
         resumed = self.command("claude", SessionPlan("u-1", resume=True))
         self.assertIn("--resume u-1 ", resumed)
         self.assertIn(RESUME_PROMPT, resumed)
-        self.assertNotIn('"$(cat ', resumed)
+        self.assertNotIn('"$(<', resumed)
 
     def test_pi_uses_one_flag_for_both(self):
         fresh = self.command("pi", SessionPlan("u-2", resume=False))
@@ -333,13 +333,44 @@ class LaunchCommandTest(unittest.TestCase):
         self.assertIn("--session-id u-2 ", resumed)
         self.assertIn(RESUME_PROMPT, resumed)
 
-    def test_hermes_continues_a_named_session(self):
+    def test_hermes_creates_with_its_route_and_resumes_the_worktree_session(self):
         fresh = self.command("hermes", SessionPlan("swarmforge-coder-x", resume=False))
-        self.assertIn("--continue swarmforge-coder-x --create-if-missing ", fresh)
         self.assertIn("--query-file ", fresh)
+        # A named session created with --create-if-missing freezes the profile
+        # defaults and then refuses this run's route: hermes owns the identity.
+        self.assertNotIn("--continue", fresh)
+        self.assertNotIn("--create-if-missing", fresh)
         resumed = self.command("hermes", SessionPlan("swarmforge-coder-x", resume=True))
+        self.assertIn("--resume latest ", resumed)
         self.assertIn("-q ", resumed)
+        self.assertIn(RESUME_PROMPT, resumed)
         self.assertNotIn("--query-file", resumed)
+
+    def test_hermes_resume_does_not_repeat_the_route(self):
+        row = RoleRow(role="coder", agent="hermes", session="swarmforge-coder", display_name="Coder",
+                      worktree_name="master", worktree_path=self.root, receive_mode="task",
+                      extra_args="--provider opencode-go --model minimax-m3 --reasoning medium --yolo",
+                      workspace_id="w2", pane_id="w2:p1")
+        fresh = build_launch_command(self.ctx, 1, row, SessionPlan("swarmforge-coder-x", resume=False))
+        self.assertIn("--provider opencode-go --model minimax-m3", fresh)
+        # The route is frozen when the session is created: repeating it is
+        # allowed, changing it is refused, so the resume leaves it out.
+        resumed = build_launch_command(self.ctx, 1, row, SessionPlan("swarmforge-coder-x", resume=True))
+        self.assertNotIn("--model", resumed)
+        self.assertNotIn("--provider", resumed)
+
+    def test_prompt_is_read_with_bash_builtin_not_cat(self):
+        for agent in ["claude", "codex", "copilot", "grok", "opencode", "kiro-cli"]:
+            cmd = self.command(agent, SessionPlan("u-1", resume=False))
+            self.assertNotIn("$(cat", cmd, agent)
+            self.assertIn('"$(<', cmd, agent)
+
+    def test_fresh_launch_fails_loudly_on_empty_prompt(self):
+        fresh = self.command("codex", SessionPlan("u-1", resume=False))
+        self.assertIn("if [ ! -s ", fresh)
+        self.assertIn("exit 1", fresh)
+        resumed = self.command("codex", SessionPlan("u-1", resume=True))
+        self.assertNotIn("if [ ! -s ", resumed)
 
     def test_no_plan_keeps_the_old_command(self):
         cmd = self.command("claude", None)
