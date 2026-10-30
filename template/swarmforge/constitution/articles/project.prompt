@@ -36,7 +36,7 @@ specifier: merge into working branch, NO commit/push, wait for user review
 - A handoff reaching the specifier from the architect means the feature is finished. The swarm itself (code, not an agent) publishes the final commit as a pull request for the user to review, detects the merge, syncs the worktrees and dispatches the next feature. The swarm never merges a pull request and never pushes to the base branch; the user does the merge.
 
 ## Specifications
-- A requested module is split by the specifier into sequential features recorded in the feature plan (`.swarmforge/plan/`): `plan.json`, `general.md` and one `features/<id>.md` per feature. Each feature is a vertical slice of approximately 400 lines of production code; the figure is a guide, never a limit.
+- A requested module is split by the specifier into sequential features recorded in the feature plan (`.swarmforge/plan/`): `plan.json`, `decisions.md` (the record of the interview), `general.md` and one `features/<id>.md` per feature. Each feature is a vertical slice of approximately 400 lines of production code; the figure is a guide, never a limit.
 - Each feature has its own specification slice and, when the project uses Gherkin, its own Gherkin file. Features are handed to the coder strictly one at a time; the next starts only after the previous one is merged.
 - Size and scope checks are advisory. They never reject a handoff, never send work back to the specifier and never cut the coder's work short.
 

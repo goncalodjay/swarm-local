@@ -6,10 +6,13 @@ the shared git common dir):
 
     plan.json            machine state: statuses, dependencies, acceptance
     general.md           overview every feature shares (about 400 lines max)
+    decisions.md         record of the questions settled in the interview
     features/<id>.md     one slice per feature (about 400 lines max)
 
-The ~400 line figure is a guide for sizing, never a hard limit: every size
-check in this module only produces WARNINGS.
+The ~400 line figure is a guide for sizing CODE, never a hard limit and never
+a reason to thin out a specification: every size check in this module only
+produces WARNINGS. What validation does enforce is that the interview happened
+(decisions.md) and that each feature file has its required sections filled in.
 
 This module is pure (no git writes, no agents); callers pass directories.
 """
@@ -67,6 +70,32 @@ LINE_GUIDE = 400
 # Warn only when clearly beyond the guide, so ~400 does not become a limit.
 EST_LINES_WARN = 600
 MD_LINES_WARN = LINE_GUIDE
+
+# The interview record. Each settled question is a `## D<n>: <question>`
+# section holding a non-empty `Decision: <answer>` line (and optional `Why:`).
+DECISIONS_FILE = "decisions.md"
+DEFAULT_MIN_DECISIONS = 5
+DECISION_HEADING_RE = re.compile(r"^##[ \t]+D(\d+)[ \t]*:[ \t]*(\S.*?)[ \t]*$")
+DECISION_LINE_RE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?\**Decision\**[ \t]*:[ \t]*\**[ \t]*(.*)$", re.IGNORECASE)
+WHY_LINE_RE = re.compile(r"^[ \t]*(?:[-*][ \t]+)?\**Why\**[ \t]*:", re.IGNORECASE)
+FENCE_RE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})(.*)$")
+# Answers that look filled in but settle nothing (compared after normalization).
+PLACEHOLDER_ANSWERS = frozenset({
+    "tbd", "tba", "todo", "na", "none", "pending", "unknown", "answer", "your answer",
+    "fill in", "fill me in", "fill in here", "to be decided", "to be defined", "to be determined",
+    "later", "wip",
+})
+MIN_ANSWER_ALNUM = 3
+# How a stuck author gets out of a failed interview/section check.
+RECOVERY = (
+    "To fix an existing plan: write decisions.md with at least {needed} entries, each `## D<n>: <question>` "
+    "plus a real `Decision: <answer>` line; make sure every features/<id>.md has non-empty "
+    "'## Behavior', '## Edge cases', '## Acceptance examples', '## Out of scope' and '## Files' sections; "
+    "then ask the user to run `swarm plan approve` again."
+)
+# Sections every features/<id>.md must contain, non-empty. Size is never
+# checked here: short features must not mean thin specs.
+REQUIRED_FEATURE_SECTIONS = ("Behavior", "Edge cases", "Acceptance examples", "Out of scope", "Files")
 
 ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,79}")
 REQUIRED_FEATURE_FIELDS = (
@@ -331,8 +360,12 @@ def _find_cycle(features):
     return None
 
 
-def validate(plan, plan_dir):
-    """Return (errors, warnings). Only errors block approval."""
+def validate(plan, plan_dir, interview=True):
+    """Return (errors, warnings). Only errors block approval.
+
+    `interview=False` skips the checks added with the mandatory interview
+    (decisions.md, feature sections): the handoff gate uses it so a plan
+    approved before those checks existed is not stuck."""
     errors, warnings = [], []
     for field in REQUIRED_PLAN_FIELDS:
         if field not in plan:
@@ -353,6 +386,10 @@ def validate(plan, plan_dir):
         cap = plan["max_review_rounds"]
         if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
             errors.append("Plan field 'max_review_rounds' must be an integer >= 1.")
+    if "min_decisions" in plan:
+        floor = plan["min_decisions"]
+        if isinstance(floor, bool) or not isinstance(floor, int) or floor < 0:
+            errors.append("Plan field 'min_decisions' must be a non-negative integer.")
     features = plan.get("features")
     if not isinstance(features, list):
         errors.append("Plan field 'features' must be a list.")
@@ -422,10 +459,13 @@ def validate(plan, plan_dir):
             md = feature_file(plan_dir, fid)
             if not md.is_file():
                 errors.append(f"Feature {label} is missing its file {md}.")
-            elif _line_count(md) > MD_LINES_WARN:
-                warnings.append(
-                    f"Feature file {md.name} has {_line_count(md)} lines (guide is ~{MD_LINES_WARN})."
-                )
+            else:
+                if interview:
+                    errors.extend(feature_section_errors(md, min_decisions(plan)))
+                if _line_count(md) > MD_LINES_WARN:
+                    warnings.append(
+                        f"Feature file {md.name} has {_line_count(md)} lines (guide is ~{MD_LINES_WARN})."
+                    )
 
     for f in features:
         if not isinstance(f, dict) or _valid_deps(f) is None:
@@ -448,7 +488,229 @@ def validate(plan, plan_dir):
             warnings.append(
                 f"{general} has {_line_count(gpath)} lines (guide is ~{MD_LINES_WARN})."
             )
+    if interview:
+        errors.extend(decision_errors(plan, plan_dir))
     return errors, warnings
+
+
+# --- interview record and feature sections -------------------------------------
+
+def min_decisions(plan):
+    """Minimum settled decisions the plan needs (plan.json `min_decisions`)."""
+    floor = plan.get("min_decisions") if isinstance(plan, dict) else None
+    if isinstance(floor, bool) or not isinstance(floor, int) or floor < 0:
+        return DEFAULT_MIN_DECISIONS
+    return floor
+
+
+def normalize_answer(text):
+    """Lowercased answer without wrapping/decoration: `(TBD!)` -> `tbd`."""
+    text = re.sub(r"[^\w\s]", " ", text.lower().replace("n/a", "na"))
+    return " ".join(text.split())
+
+
+def is_placeholder(text, min_alnum=MIN_ANSWER_ALNUM):
+    """True for an answer that settles nothing: empty, TBD-like, or too short."""
+    norm = normalize_answer(text)
+    if norm in PLACEHOLDER_ANSWERS:
+        return True
+    return sum(c.isalnum() for c in norm) < min_alnum
+
+
+class _Fence:
+    """Tracks fenced code (``` or ~~~): closes only with the same character and
+    at least the opening length, per CommonMark."""
+
+    def __init__(self):
+        self.opener = None
+
+    def marker(self, line):
+        """True when `line` opens or closes a fence (it is then not content)."""
+        m = FENCE_RE.match(line)
+        if m is None:
+            return False
+        run, rest = m.group(1), m.group(2)
+        if self.opener is None:
+            if run[0] == "`" and "`" in rest:
+                return False  # inline code, not a fence
+            self.opener = (run[0], len(run))
+            return True
+        if run[0] == self.opener[0] and len(run) >= self.opener[1] and not rest.strip():
+            self.opener = None
+            return True
+        return False
+
+    @property
+    def inside(self):
+        return self.opener is not None
+
+
+def scan_decisions(text):
+    """[[number, question, answer, reason]] for every `## D<n>: ...` heading.
+    `reason` is '' when settled, else 'no answer' or 'placeholder answer'.
+
+    The answer is the same-line text after `Decision:`, or, when that is empty,
+    the next non-empty line (a bullet marker is dropped)."""
+    entries, current, awaiting = [], None, False
+    fence = _Fence()
+    for line in text.splitlines():
+        if fence.marker(line) or fence.inside:
+            continue
+        heading = DECISION_HEADING_RE.match(line)
+        if heading:
+            current = [int(heading.group(1)), heading.group(2), "", "no answer"]
+            entries.append(current)
+            awaiting = False
+            continue
+        if line.startswith("#"):
+            current, awaiting = None, False  # any other heading ends the section
+            continue
+        if current is None or current[3] == "":
+            continue
+        if awaiting:
+            if not line.strip():
+                continue
+            awaiting = False
+            if WHY_LINE_RE.match(line):
+                continue
+            answer = re.sub(r"^[ \t]*[-*][ \t]+", "", line).strip().strip("*").strip()
+        else:
+            m = DECISION_LINE_RE.match(line)
+            if not m:
+                continue
+            answer = m.group(1).strip().strip("*").strip()
+            if not answer:
+                awaiting = True
+                continue
+        if current[2]:
+            continue
+        current[2] = answer
+        current[3] = "placeholder answer" if is_placeholder(answer) else ""
+    return entries
+
+
+def parse_decisions(text):
+    """[(number, question, decision)] for every section with a real answer."""
+    return [(n, q, a) for n, q, a, reason in scan_decisions(text) if not reason]
+
+
+def _read_text(path):
+    return Path(path).read_text(encoding="utf-8-sig")  # tolerate a BOM
+
+
+def settled_decisions(plan_dir):
+    """Settled decisions in decisions.md, or None when the file is unreadable."""
+    try:
+        return parse_decisions(_read_text(Path(plan_dir) / DECISIONS_FILE))
+    except (OSError, ValueError):
+        return None
+
+
+def decision_errors(plan, plan_dir):
+    """The interview gate: decisions.md must record enough settled questions."""
+    needed = min_decisions(plan)
+    if needed == 0:
+        return []
+    path = Path(plan_dir) / DECISIONS_FILE
+    how = (
+        "Record each question settled with the user as a section `## D<n>: <question>` "
+        "followed by a non-empty `Decision: <answer>` line (the answer may also start on the "
+        "next line; optional `Why: <reason>`). Finish the interview with the user before "
+        "writing the plan. " + RECOVERY.format(needed=needed)
+    )
+    try:
+        entries = scan_decisions(_read_text(path))
+    except (OSError, ValueError):
+        return [f"Interview record is missing: {path}. The plan needs at least {needed} settled decisions. {how}"]
+    errors = []
+    ids = [e[0] for e in entries]
+    duplicates = sorted({n for n in ids if ids.count(n) > 1})
+    if duplicates:
+        errors.append(
+            f"{DECISIONS_FILE} repeats decision id(s): " + ", ".join(f"D{n}" for n in duplicates)
+            + ". Each `## D<n>:` heading must be unique.")
+    settled = {n for n, _q, _a, reason in entries if not reason}
+    if len(settled) < needed:
+        rejected = [f"D{n} ({q[:40]}): {reason}" for n, q, _a, reason in entries if reason]
+        detail = f" Rejected: {'; '.join(rejected)}." if rejected else ""
+        errors.append(
+            f"{DECISIONS_FILE} has {len(settled)} distinct settled decision(s); the plan needs at least "
+            f"{needed} (plan.json 'min_decisions').{detail} {how}")
+    return errors
+
+
+def _strip_comments(line, in_comment):
+    """(line without HTML comments, still inside a multi-line comment)."""
+    out, i = [], 0
+    while i < len(line):
+        if in_comment:
+            j = line.find("-->", i)
+            if j < 0:
+                return "".join(out), True
+            i, in_comment = j + 3, False
+        else:
+            j = line.find("<!--", i)
+            if j < 0:
+                out.append(line[i:])
+                break
+            out.append(line[i:j])
+            i, in_comment = j + 4, True
+    return "".join(out), in_comment
+
+
+def feature_sections(text):
+    """{lowercased `## ` heading: meaningful content lines} of a feature file.
+    Fenced code lines are content (the markers are not), headings inside fences
+    never count, HTML comments are dropped but text beside them is kept, and
+    placeholder-only lines (TBD, TODO...) are not content."""
+    sections, current, in_comment = {}, None, False
+    fence = _Fence()
+    for line in text.splitlines():
+        if fence.marker(line):
+            continue
+        if fence.inside:
+            if current is not None and line.strip():
+                sections[current].append(line.strip())
+            continue
+        line, in_comment = _strip_comments(line, in_comment)
+        heading = re.match(r"^##[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$", line)
+        if heading:
+            current = heading.group(1).strip().lower()
+            sections.setdefault(current, [])
+            continue
+        if re.match(r"^#[ \t]", line):
+            current = None  # a new top-level heading ends the section
+            continue
+        stripped = line.strip()
+        if current is not None and stripped and not is_placeholder(stripped, 1):
+            sections[current].append(stripped)
+    return sections
+
+
+def feature_section_errors(md_path, needed=DEFAULT_MIN_DECISIONS):
+    """Errors for a feature file lacking a required `## ` section or holding an empty one."""
+    try:
+        sections = feature_sections(_read_text(md_path))
+    except (OSError, ValueError):
+        return []  # existence is reported separately
+    missing = [s for s in REQUIRED_FEATURE_SECTIONS if s.lower() not in sections]
+    empty = [s for s in REQUIRED_FEATURE_SECTIONS if s.lower() in sections and not sections[s.lower()]]
+    errors = []
+    name = Path(md_path).name
+    if missing:
+        errors.append(
+            f"Feature file {name} is missing required section(s): "
+            + ", ".join(f"'## {s}'" for s in missing)
+            + ". Add each as a level-2 heading with real content. " + RECOVERY.format(needed=needed)
+        )
+    if empty:
+        errors.append(
+            f"Feature file {name} has empty section(s): "
+            + ", ".join(f"'## {s}'" for s in empty)
+            + ". Fill them in with real content (a bare TBD/TODO/none counts as empty; "
+            "for 'Out of scope' say what is excluded, or 'Nothing beyond <the behavior above>')."
+        )
+    return errors
 
 
 # --- queries --------------------------------------------------------------
@@ -585,7 +847,8 @@ def approval_file(plan_dir):
 
 def content_hash(plan_dir):
     """sha256 of the plan content minus statuses/approved_at/delivery settings
-    and per-feature runtime fields, plus the bytes of general.md and features/*.md."""
+    and per-feature runtime fields, plus the bytes of general.md, decisions.md
+    and features/*.md."""
     plan = load(plan_dir)
     ignored = ("status", "approved_at") + DELIVERY_PLAN_FIELDS
     canon = {k: v for k, v in plan.items() if k not in ignored}
@@ -602,6 +865,11 @@ def content_hash(plan_dir):
     feats = Path(plan_dir) / "features"
     if feats.is_dir():
         files += [("feature/" + p.name, p) for p in sorted(feats.glob("*.md"), key=lambda p: p.name)]
+    # decisions.md joins the hash only when present, so a plan approved before
+    # the interview record existed keeps its approval until it is edited.
+    decisions = Path(plan_dir) / DECISIONS_FILE
+    if decisions.is_file():
+        files.append(("decisions", decisions))
     for name, path in files:
         try:
             data = path.read_bytes()
@@ -1105,7 +1373,7 @@ def check_specifier_to_coder(plan_dir, task):
     if not exists(plan_dir):
         return [
             f"No feature plan found at {plan_path(plan_dir)}. Create the plan "
-            "(plan.json, general.md, features/<id>.md), run `swarm plan validate`, "
+            "(plan.json, general.md, decisions.md, features/<id>.md), run `swarm plan validate`, "
             "and ask the user to run `swarm plan approve` before handing work to the coder."
         ]
     try:
@@ -1120,7 +1388,9 @@ def check_specifier_to_coder(plan_dir, task):
             "you cannot approve it yourself."
         ]
     # An approved plan may have been edited into an invalid state since.
-    invalid, _warnings = validate(plan, plan_dir)
+    # interview=False: plans approved before the interview checks existed must
+    # keep working; approval-hash integrity below still guards their content.
+    invalid, _warnings = validate(plan, plan_dir, interview=False)
     if invalid:
         return ["The approved plan is now invalid:"] + [f"  - {e}" for e in invalid]
     changed = approval_errors(plan_dir)

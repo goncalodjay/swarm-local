@@ -28,6 +28,7 @@ from swarm_python import plan_cli  # noqa: E402
 from swarm_python import plan_flow  # noqa: E402
 from swarm_python.entrypoints import handoffd  # noqa: E402
 from swarm_python.plan_flow import PlanFlow, Result  # noqa: E402
+from test_plan import decisions_md, feature_md  # noqa: E402
 
 
 def git(cwd, *args):
@@ -155,7 +156,8 @@ class FlowCase(unittest.TestCase):
         (self.plan_dir / "features").mkdir(parents=True, exist_ok=True)
         (self.plan_dir / "general.md").write_text("overview\n", encoding="utf-8")
         for f in features:
-            (self.plan_dir / "features" / f"{f['id']}.md").write_text(f"{f['id']}\n", encoding="utf-8")
+            (self.plan_dir / "features" / f"{f['id']}.md").write_text(feature_md(f["id"]), encoding="utf-8")
+        (self.plan_dir / "decisions.md").write_text(decisions_md(), encoding="utf-8")
         planlib.save(self.plan_dir, plan)
         planlib.record_approval(self.plan_dir)
 

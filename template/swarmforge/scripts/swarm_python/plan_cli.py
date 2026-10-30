@@ -41,6 +41,14 @@ def _load(plan_dir):
         return None
 
 
+def _decisions_line(plan, plan_dir):
+    settled = planlib.settled_decisions(plan_dir)
+    needed = planlib.min_decisions(plan)
+    if settled is None:
+        return f"Decisiones de la entrevista ({planlib.DECISIONS_FILE}): no existe (minimo {needed})"
+    return f"Decisiones de la entrevista ({planlib.DECISIONS_FILE}): {len(settled)} cerradas (minimo {needed})"
+
+
 def cmd_validate(plan_dir):
     plan = _load(plan_dir)
     if plan is None:
@@ -62,6 +70,7 @@ def cmd_show(plan_dir):
     if plan is None:
         return 1
     _out(f"Plan: {plan.get('title', '')} ({plan.get('status', '?')})")
+    _out(_decisions_line(plan, plan_dir))
     for f in plan.get("features", []):
         _out("")
         _out(f"[{f.get('status', '?')}] {f.get('id', '?')} - {f.get('title', '')}")
@@ -80,6 +89,7 @@ def cmd_status(plan_dir):
     _out(f"Plan: {plan.get('title', '')} - estado: {plan.get('status', '?')}")
     if plan.get("base_branch"):
         _out(f"Rama base: {plan['base_branch']}")
+    _out(_decisions_line(plan, plan_dir))
     for f in plan.get("features", []):
         _out(f"  {f.get('status', '?'):<15} {f.get('id', '?')}")
         if f.get("final_commit"):

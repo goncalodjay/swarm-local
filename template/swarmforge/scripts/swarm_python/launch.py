@@ -86,7 +86,10 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
         f"export SWARMFORGE_ROLE={shell_quote(role)} && "
         f"export ENGRAM_PROJECT={shell_quote(ctx.working_dir.name)} && "
         f"export PATH={shell_quote(str(role_script_dir))}:"
-        f"{shell_quote(str(role_tool_bin))}:$PATH && "
+        f"{shell_quote(str(role_tool_bin))}:$PATH:"
+        # The project root holds the `swarm` entry point (plan, stop...). It goes
+        # LAST so nothing in the project can shadow a system command.
+        f"{shell_quote(str(ctx.working_dir))} && "
         f"cd {shell_quote(str(role_worktree))} && "
     )
     if not (session is not None and session.resume):

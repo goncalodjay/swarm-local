@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from swarm_python import agent_state, scheduler as sched  # noqa: E402
 from swarm_python.config import RoleRow  # noqa: E402
+from swarm_python.env import shell_quote  # noqa: E402
 from swarm_python.entrypoints import handoffd  # noqa: E402
 from swarm_python.launch import build_launch_command  # noqa: E402
 from swarm_python.paths import build_context  # noqa: E402
@@ -358,6 +359,10 @@ class LaunchCommandTest(unittest.TestCase):
         resumed = build_launch_command(self.ctx, 1, row, SessionPlan("swarmforge-coder-x", resume=True))
         self.assertNotIn("--model", resumed)
         self.assertNotIn("--provider", resumed)
+
+    def test_project_root_is_last_on_path_so_agents_can_run_swarm(self):
+        cmd = self.command("claude", SessionPlan("u-1", resume=False))
+        self.assertIn(f":$PATH:{shell_quote(str(self.root))} &&", cmd)
 
     def test_prompt_is_read_with_bash_builtin_not_cat(self):
         for agent in ["claude", "codex", "copilot", "grok", "opencode", "kiro-cli"]:

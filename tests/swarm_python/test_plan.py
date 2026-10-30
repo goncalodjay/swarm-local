@@ -40,6 +40,23 @@ def feature(fid, depends_on=(), status="pending", **extra):
     return f
 
 
+def feature_md(fid):
+    """A feature file holding every required section."""
+    return (
+        f"# {fid}\n\nDetails of {fid}\n\n"
+        "## Behavior\nDoes the thing.\n\n"
+        "## Edge cases\nEmpty input returns an error.\n\n"
+        "## Acceptance examples\n`x` -> `y`\n\n"
+        "## Out of scope\nNothing else.\n\n"
+        "## Files\nsrc/x.py\n"
+    )
+
+
+def decisions_md(count=5):
+    return "# Decisions\n\n" + "".join(
+        f"## D{i}: Question {i}?\nDecision: Answer {i}\nWhy: Because {i}\n\n" for i in range(1, count + 1))
+
+
 def make_plan(features=None, status="approved"):
     return {
         "id": "mod",
@@ -58,7 +75,8 @@ def write_plan(plan_dir, plan, with_files=True, general_lines=5):
     if with_files:
         (plan_dir / "general.md").write_text("\n".join(["overview"] * general_lines) + "\n", encoding="utf-8")
         for f in plan["features"]:
-            (plan_dir / "features" / f"{f['id']}.md").write_text(f"Details of {f['id']}\n", encoding="utf-8")
+            (plan_dir / "features" / f"{f['id']}.md").write_text(feature_md(f["id"]), encoding="utf-8")
+        (plan_dir / "decisions.md").write_text(decisions_md(), encoding="utf-8")
     planlib.save(plan_dir, plan)
     if plan.get("status") == "approved":
         planlib.record_approval(plan_dir)
@@ -121,7 +139,7 @@ class SchemaTests(PlanTestCase):
     def test_size_problems_only_warn(self):
         plan = make_plan([feature("a", est_lines=5000)])
         write_plan(self.dir, plan, general_lines=450)
-        (self.dir / "features" / "a.md").write_text("x\n" * 450, encoding="utf-8")
+        (self.dir / "features" / "a.md").write_text(feature_md("a") + "x\n" * 450, encoding="utf-8")
         errors, warnings = planlib.validate(plan, self.dir)
         self.assertEqual(errors, [])
         self.assertEqual(len(warnings), 3)
@@ -334,7 +352,7 @@ class ApprovalTests(PlanTestCase):
         self.assertEqual(self.gate(), [])
 
     def test_feature_markdown_change_is_rejected(self, _r):
-        (self.dir / "features" / "a.md").write_text("sneaky edit\n", encoding="utf-8")
+        (self.dir / "features" / "a.md").write_text(feature_md("a") + "sneaky edit\n", encoding="utf-8")
         self.assertIn("plan content changed since approval", self.gate()[0])
 
     def test_general_markdown_change_is_rejected(self, _r):
@@ -352,7 +370,7 @@ class ApprovalTests(PlanTestCase):
         self.assertEqual(self.gate(), [])
 
     def test_reapproving_records_the_new_content(self, _r):
-        (self.dir / "features" / "a.md").write_text("revised\n", encoding="utf-8")
+        (self.dir / "features" / "a.md").write_text(feature_md("a") + "revised\n", encoding="utf-8")
         self.assertTrue(self.gate())
         code = plan_cli.main(["approve"], plan_dir=self.dir, env={})
         self.assertEqual(code, 0)
@@ -943,6 +961,287 @@ class LifecycleTests(PlanTestCase):
             self.assertTrue(planlib.is_non_production(noise), noise)
         self.assertFalse(planlib.is_non_production("src/docs/x.md"))
         self.assertFalse(planlib.is_non_production("src/a.py"))
+
+
+class DecisionsGateTests(PlanTestCase):
+    def errors(self, plan=None):
+        plan = plan or planlib.load(self.dir)
+        return [e for e in planlib.validate(plan, self.dir)[0] if "ecision" in e or "nterview" in e]
+
+    def test_missing_decisions_file_fails_validate_and_approve(self):
+        write_plan(self.dir, make_plan(status="draft"))
+        (self.dir / "decisions.md").unlink()
+        self.assertTrue(any("Interview record is missing" in e for e in self.errors()))
+        code = plan_cli.main(["approve"], plan_dir=self.dir, env={})
+        self.assertEqual(code, 2)
+        self.assertEqual(planlib.load(self.dir)["status"], "draft")
+
+    def test_too_few_settled_decisions_fails(self):
+        write_plan(self.dir, make_plan(status="draft"))
+        (self.dir / "decisions.md").write_text(decisions_md(4), encoding="utf-8")
+        (err,) = self.errors()
+        self.assertIn("4 distinct settled decision(s)", err)
+        self.assertIn("at least 5", err)
+
+    def test_unanswered_and_placeholder_decisions_do_not_count(self):
+        write_plan(self.dir, make_plan(status="draft"))
+        text = decisions_md(4) + "## D5: Open?\n\n## D6: Later?\nDecision: TBD\n\n## D7: Empty?\nDecision:\n"
+        (self.dir / "decisions.md").write_text(text, encoding="utf-8")
+        self.assertEqual(len(planlib.settled_decisions(self.dir)), 4)
+        self.assertTrue(self.errors())
+
+    def test_decision_format_variants_and_fences(self):
+        text = (
+            "## D1: Bold?\n**Decision:** yes\n\n"
+            "## D2: Bullet?\n- Decision: yes\n\n"
+            "```\n## D4: Fenced?\nDecision: yes\n```\n"
+            "## D5: Real?\nWhy: because\nDecision: yes\n"
+        )
+        self.assertEqual([n for n, _, _ in planlib.parse_decisions(text)], [1, 2, 5])
+
+    def test_decision_keyword_is_case_insensitive(self):
+        for keyword in ("decision", "DECISION", "Decision"):
+            text = f"## D1: Q?\n{keyword}: yes please\n"
+            self.assertEqual(len(planlib.parse_decisions(text)), 1, keyword)
+
+    def test_min_decisions_is_configurable_and_validated(self):
+        plan = make_plan(status="draft")
+        plan["min_decisions"] = 2
+        write_plan(self.dir, plan)
+        (self.dir / "decisions.md").write_text(decisions_md(2), encoding="utf-8")
+        self.assertEqual(self.errors(), [])
+        plan["min_decisions"] = 0
+        (self.dir / "decisions.md").unlink()
+        self.assertEqual(self.errors(plan), [])
+        for bad in (-1, "5", 2.5, True, None):
+            plan["min_decisions"] = bad
+            errors, _ = planlib.validate(plan, self.dir)
+            self.assertTrue(any("'min_decisions' must be a non-negative integer" in e for e in errors), bad)
+
+    def test_editing_decisions_after_approval_invalidates_it(self):
+        write_plan(self.dir, make_plan())
+        self.assertEqual(planlib.check_specifier_to_coder(self.dir, "a"), [])
+        (self.dir / "decisions.md").write_text(decisions_md(6), encoding="utf-8")
+        self.assertIn("plan content changed since approval", planlib.check_specifier_to_coder(self.dir, "a")[0])
+
+    def test_decisions_content_is_part_of_the_hash(self):
+        write_plan(self.dir, make_plan(), with_files=True)
+        planlib.record_approval(self.dir)
+        before = planlib.content_hash(self.dir)
+        self.assertEqual(planlib.approval_errors(self.dir), [])
+        (self.dir / "decisions.md").write_text(decisions_md(5) + "extra\n", encoding="utf-8")
+        self.assertNotEqual(planlib.content_hash(self.dir), before)
+
+    def test_show_and_status_report_the_decisions(self):
+        write_plan(self.dir, make_plan())
+        for command in ("show", "status"):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                plan_cli.main([command], plan_dir=self.dir, env={})
+            line = next(l for l in out.getvalue().splitlines() if planlib.DECISIONS_FILE in l)
+            self.assertIn("5", line)
+
+
+class DecisionsParsingTests(PlanTestCase):
+    def test_duplicate_ids_count_once_and_are_an_error(self):
+        plan = make_plan(status="draft")
+        write_plan(self.dir, plan)
+        text = decisions_md(4) + "## D2: Again?\nDecision: something else\n"
+        (self.dir / "decisions.md").write_text(text, encoding="utf-8")
+        errors, _ = planlib.validate(plan, self.dir)
+        self.assertTrue(any("repeats decision id(s): D2" in e for e in errors))
+        self.assertTrue(any("4 distinct settled" in e for e in errors))
+
+    def test_placeholder_answers_are_normalised(self):
+        for bad in ("TBD!", "(tbd)", "[fill in]", "<answer>", "to be decided", "None", "n/a", "N/A.", "ok", "-", "**TODO**"):
+            self.assertTrue(planlib.is_placeholder(bad), bad)
+        for good in ("Use PostgreSQL", "yes", "no retries", "3 retries"):
+            self.assertFalse(planlib.is_placeholder(good), good)
+
+    def test_next_line_and_bullet_answers_are_accepted(self):
+        text = (
+            "## D1: Next line?\nDecision:\nUse a queue.\n\n"
+            "## D2: Blank between?\nDecision:\n\n   Use a cache.\n\n"
+            "## D3: Bullet?\nDecision:\n- Use a bullet.\n\n"
+            "## D4: Why only?\nDecision:\nWhy: because\n\n"
+            "## D5: Next heading?\nDecision:\n## D6: Fine?\nDecision: yes sure\n"
+        )
+        got = {n: a for n, _q, a in planlib.parse_decisions(text)}
+        self.assertEqual(got, {1: "Use a queue.", 2: "Use a cache.", 3: "Use a bullet.", 6: "yes sure"})
+
+    def test_error_names_the_rejected_sections(self):
+        plan = make_plan(status="draft")
+        write_plan(self.dir, plan)
+        text = decisions_md(3) + "## D4: Open question\n\n## D5: Filler\nDecision: [fill in]\n"
+        (self.dir / "decisions.md").write_text(text, encoding="utf-8")
+        errors, _ = planlib.validate(plan, self.dir)
+        (err,) = [e for e in errors if "settled decision" in e]
+        self.assertIn("D4 (Open question): no answer", err)
+        self.assertIn("D5 (Filler): placeholder answer", err)
+
+    def test_tilde_and_long_fences(self):
+        text = (
+            "~~~\n## D1: Hidden?\nDecision: yes\n~~~\n"
+            "````\n```\n## D2: Still hidden?\nDecision: yes\n```\n````\n"
+            "```\n~~~\n## D3: Hidden too?\nDecision: yes\n~~~\n```\n"
+            "## D4: Visible?\nDecision: yes indeed\n"
+        )
+        self.assertEqual([n for n, _, _ in planlib.parse_decisions(text)], [4])
+
+    def test_bom_and_crlf_are_tolerated(self):
+        plan = make_plan(status="draft")
+        write_plan(self.dir, plan)
+        body = decisions_md(5).replace("\n", "\r\n")
+        (self.dir / "decisions.md").write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+        self.assertEqual(len(planlib.settled_decisions(self.dir)), 5)
+        md = feature_md("a").replace("\n", "\r\n")
+        (self.dir / "features" / "a.md").write_bytes(b"\xef\xbb\xbf" + md.encode("utf-8"))
+        errors, _ = planlib.validate(plan, self.dir)
+        self.assertEqual(errors, [])
+
+    def test_recovery_steps_are_spelled_out(self):
+        plan = make_plan(status="draft")
+        write_plan(self.dir, plan)
+        (self.dir / "decisions.md").unlink()
+        (self.dir / "features" / "a.md").write_text("# a\n", encoding="utf-8")
+        errors, _ = planlib.validate(plan, self.dir)
+        text = "\n".join(errors)
+        self.assertIn("at least 5 entries", text)
+        self.assertIn("'## Behavior'", text)
+        self.assertIn("swarm plan approve", text)
+
+
+class LegacyApprovedPlanTests(PlanTestCase):
+    """A plan approved before decisions.md and the feature sections existed."""
+
+    def setUp(self):
+        super().setUp()
+        write_plan(self.dir, make_plan(), with_files=False)
+        (self.dir / "general.md").write_text("overview\n", encoding="utf-8")
+        for fid in ("a", "b", "c"):
+            (self.dir / "features" / f"{fid}.md").write_text(f"Details of {fid}\n", encoding="utf-8")
+        planlib.record_approval(self.dir)
+
+    def test_gate_still_passes_without_the_new_artifacts(self):
+        self.assertFalse((self.dir / "decisions.md").exists())
+        self.assertEqual(planlib.check_specifier_to_coder(self.dir, "a"), [])
+
+    def test_gate_still_enforces_hash_and_structure(self):
+        (self.dir / "features" / "a.md").write_text("tampered\n", encoding="utf-8")
+        self.assertIn("plan content changed since approval", planlib.check_specifier_to_coder(self.dir, "a")[0])
+        plan = planlib.load(self.dir)
+        plan["features"][0]["acceptance"] = []
+        planlib.save(self.dir, plan)
+        self.assertIn("now invalid", planlib.check_specifier_to_coder(self.dir, "a")[0])
+
+    def test_validate_and_approve_fail_with_the_new_errors(self):
+        errors, _ = planlib.validate(planlib.load(self.dir), self.dir)
+        self.assertTrue(any("Interview record is missing" in e for e in errors))
+        self.assertTrue(any("missing required section(s)" in e for e in errors))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(plan_cli.main(["validate"], plan_dir=self.dir, env={}), 2)
+            self.assertEqual(plan_cli.main(["approve"], plan_dir=self.dir, env={}), 2)
+        self.assertIn("swarm plan approve", err.getvalue())
+
+    def test_recovering_then_approving_works(self):
+        (self.dir / "decisions.md").write_text(decisions_md(), encoding="utf-8")
+        for fid in ("a", "b", "c"):
+            (self.dir / "features" / f"{fid}.md").write_text(feature_md(fid), encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(plan_cli.main(["approve"], plan_dir=self.dir, env={}), 0)
+        self.assertEqual(planlib.check_specifier_to_coder(self.dir, "a"), [])
+
+
+class FeatureSectionTests(PlanTestCase):
+    def setUp(self):
+        super().setUp()
+        write_plan(self.dir, make_plan([feature("a")]))
+        self.md = self.dir / "features" / "a.md"
+
+    def errors(self):
+        return planlib.feature_section_errors(self.md)
+
+    def test_complete_file_passes(self):
+        self.assertEqual(self.errors(), [])
+
+    def test_missing_sections_are_listed(self):
+        self.md.write_text("# a\n\n## Behavior\nDoes it.\n", encoding="utf-8")
+        (err,) = self.errors()
+        for name in ("Edge cases", "Acceptance examples", "Out of scope", "Files"):
+            self.assertIn(f"'## {name}'", err)
+        self.assertNotIn("'## Behavior'", err.split("Add each")[0])
+        errors, _ = planlib.validate(planlib.load(self.dir), self.dir)
+        self.assertTrue(any("a.md is missing required section(s)" in e for e in errors))
+
+    def test_empty_section_is_an_error_even_with_comments_and_blank_lines(self):
+        self.md.write_text(feature_md("a").replace("Nothing else.", "\n<!-- todo -->\n\n"), encoding="utf-8")
+        (err,) = self.errors()
+        self.assertIn("empty section(s): '## Out of scope'", err)
+
+    def test_headings_match_case_insensitively_and_subheadings_are_content(self):
+        self.md.write_text(
+            "## BEHAVIOR\n### Detail\n## edge CASES\nx\n## Acceptance Examples\nx\n"
+            "## Out of Scope\nx\n## Files\nx\n", encoding="utf-8")
+        self.assertEqual(self.errors(), [])
+
+    def test_headings_inside_code_fences_do_not_count(self):
+        self.md.write_text("```\n" + feature_md("a") + "```\n", encoding="utf-8")
+        self.assertTrue(self.errors())
+
+    def test_long_complete_spec_is_never_an_error(self):
+        self.md.write_text(feature_md("a") + "detail\n" * 2000, encoding="utf-8")
+        errors, warnings = planlib.validate(planlib.load(self.dir), self.dir)
+        self.assertEqual(errors, [])
+        self.assertTrue(warnings)
+
+    def test_coder_context_still_carries_the_sections(self):
+        text = planlib.coder_context("a", self.dir, role="coder")
+        for name in planlib.REQUIRED_FEATURE_SECTIONS:
+            self.assertIn(f"## {name}", text)
+
+
+class FeatureSectionParsingTests(unittest.TestCase):
+    def sections(self, text):
+        return planlib.feature_sections(text)
+
+    def test_text_beside_a_comment_is_content(self):
+        self.assertEqual(self.sections("## Files\n<!-- note --> src/a.py\n")["files"], ["src/a.py"])
+
+    def test_multiline_comment_is_dropped(self):
+        got = self.sections("## Files\n<!-- start\nmiddle\nend --> src/a.py\n## Behavior\n<!-- only -->\n")
+        self.assertEqual(got["files"], ["src/a.py"])
+        self.assertEqual(got["behavior"], [])
+
+    def test_trailing_hash_is_kept_unless_a_closing_run(self):
+        got = self.sections("## C#\nx\n## Closing ##\ny\n## Spaced #\nz\n")
+        self.assertIn("c#", got)
+        self.assertIn("closing", got)
+        self.assertIn("spaced", got)
+
+    def test_placeholder_only_section_is_empty(self):
+        for filler in ("TBD", "TODO", "(tbd)", "- TBD", "[fill in]", "to be decided", "n/a"):
+            self.assertEqual(self.sections(f"## Files\n{filler}\n")["files"], [], filler)
+        self.assertEqual(self.sections("## Files\nsrc/a.py\n")["files"], ["src/a.py"])
+
+    def test_fence_marker_pair_alone_is_empty_but_fenced_content_counts(self):
+        self.assertEqual(self.sections("## Files\n```\n```\n")["files"], [])
+        self.assertEqual(self.sections("## Files\n~~~\n~~~\n")["files"], [])
+        self.assertEqual(self.sections("## Files\n~~~\nsrc/a.py\n~~~\n")["files"], ["src/a.py"])
+
+    def test_fence_closing_rules(self):
+        text = "## Files\n````\n```\n## Behavior\n````\nreal\n"
+        got = self.sections(text)
+        self.assertNotIn("behavior", got)
+        self.assertEqual(got["files"], ["```", "## Behavior", "real"])
+        got = self.sections("## Files\n~~~\n```\n## Behavior\n~~~\n")
+        self.assertNotIn("behavior", got)
+
+    def test_bom_and_crlf_feature_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "a.md"
+            path.write_bytes(b"\xef\xbb\xbf" + feature_md("a").replace("\n", "\r\n").encode("utf-8"))
+            self.assertEqual(planlib.feature_section_errors(path), [])
 
 
 if __name__ == "__main__":

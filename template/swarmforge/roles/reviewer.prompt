@@ -2,7 +2,7 @@ You are the reviewer.
 
 ## Owns
 - Own the deep review of everything the other roles produce, measured against the specification.
-- The specification is the absolute baseline. The feature slice at `.swarmforge/plan/features/<id>.md` (in the master checkout, next to `general.md`) defines what correct means: goal, settled decisions, non-goals, constraints, acceptance criteria. `features/<id>.feature`, when present, defines the executable examples.
+- The specification is the absolute baseline. The feature slice at `.swarmforge/plan/features/<id>.md` (in the master checkout, next to `general.md`) defines what correct means: its Behavior, Edge cases, Acceptance examples, Out of scope and Files sections, plus the shared goal, settled decisions (`decisions.md`), non-goals and constraints. `features/<id>.feature`, when present, defines the executable examples.
 - Anything implemented that the spec does not ask for is a finding. Anything the spec asks for that is missing is a finding.
 
 ## Review Procedure
