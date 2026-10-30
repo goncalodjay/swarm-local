@@ -109,7 +109,7 @@ El inicializador copia `swarm` y `swarmforge/`, sustituye `{{LANGUAGES}}` en la 
 
 ## Requisitos locales
 
-`./swarm` requiere `python3` (3.10+), `herdr`, `git` y el ejecutable configurado para cada rol (`pi`, `opencode`, `claude`, `codex`, `copilot`, `grok`, `hermes` o `kiro-cli`). La plantilla incluye localmente `gherkin-parser`, `gherkin-ir-dry-checker` y `gherkin-mutator`; `swarm-init` los instala bajo `.swarmforge/toolchain/bin` y los añade al `PATH` de cada agente. Las herramientas de mutación, CRAP y DRY específicas de cada lenguaje siguen siendo una decisión del proyecto: los agentes no las descargarán y pedirán indicaciones si una tarea las requiere.
+`./swarm` requiere `python3` (3.10+), `herdr`, `git` y el ejecutable configurado para cada rol (`pi`, `opencode`, `claude`, `codex`, `copilot`, `grok`, `hermes` o `kiro-cli`). La plantilla incluye localmente `gherkin-parser`, `gherkin-ir-dry-checker` y `gherkin-mutator` (build por plataforma, ver [Herramientas Gherkin por plataforma](#herramientas-gherkin-por-plataforma)); `swarm-init` instala el que corresponde al equipo bajo `.swarmforge/toolchain/bin` y los añade al `PATH` de cada agente. Las herramientas de mutación, CRAP y DRY específicas de cada lenguaje siguen siendo una decisión del proyecto: los agentes no las descargarán y pedirán indicaciones si una tarea las requiere.
 
 `swarm-init` ya no necesita `node` en el destino: copia la TUI con `install -m 0755`. Para compilarla por primera vez o para una plataforma nueva, hace falta `node` + `bun` en la máquina de build (ver tabla de requisitos). El binario del TUI no requiere ningún runtime en la máquina destino.
 
@@ -229,7 +229,9 @@ El ruteo no es solo una convención de prompts: `swarm_handoff.sh` rechaza los h
 
 El specifier no entrega el módulo entero: lo divide en features **secuenciales** y las entrega al coder de a una.
 
-1. El specifier te entrevista (una pregunta a la vez) y escribe el plan en `.swarmforge/plan/` del proyecto: `plan.json`, `general.md` (visión general compartida) y `features/<id>.md` (una por feature). Todas se dimensionan en ~400 líneas; es una guía, nunca un límite duro: el tamaño solo genera advertencias.
+1. El specifier te entrevista (una pregunta a la vez) y escribe el plan en `.swarmforge/plan/` del proyecto: `plan.json`, `decisions.md` (registro de la entrevista), `general.md` (visión general compartida) y `features/<id>.md` (una por feature).
+   - **La entrevista es obligatoria y se verifica en código.** Primero entrevista el módulo **entero** (objetivo de negocio, consumidores, datos, modos de fallo, integraciones, restricciones, definición de "hecho") y recién después lo parte en features. Mientras no termine, no puede escribir `plan.json`, `general.md` ni `features/`; un pedido vago como "armá el plan" no la saltea. Cada pregunta cerrada queda en `decisions.md` como `## D<n>: <pregunta>` seguida de una línea `Decision: <respuesta>` (y `Why:` opcional). `./swarm plan validate` y `./swarm plan approve` fallan si faltan decisiones: por defecto el mínimo es 5, ajustable con `min_decisions` (entero >= 0) en `plan.json`. `decisions.md` entra en el hash de la aprobación: editarlo después obliga a re-aprobar. Los planes **ya aprobados** antes de este cambio no se traban: el handoff al coder sigue validando la estructura clásica y el hash de aprobación, pero **no** exige `decisions.md` ni las secciones nuevas. Esas exigencias aplican solo a `./swarm plan validate` y `./swarm plan approve`; para re-aprobar un plan viejo hay que escribir `decisions.md` con al menos N entradas `## D<n>:`, agregar las 5 secciones a cada feature y volver a ejecutar `./swarm plan approve`. Los ids `D<n>` deben ser únicos, y las respuestas vacías o de relleno (`TBD`, `<respuesta>`, `[completar]`, `none`, `n/a`) no cuentan; el error nombra las rechazadas. La respuesta puede empezar en la línea siguiente a `Decision:`.
+   - **~400 líneas limita el CÓDIGO de cada feature, nunca el detalle de la especificación.** Un archivo de feature corto no es una especificación completa: cada `features/<id>.md` debe tener las secciones `## Behavior`, `## Edge cases`, `## Acceptance examples`, `## Out of scope` y `## Files`, todas con contenido (nombres, campos, firmas y rutas exactos; ejemplos entrada -> salida). `validate` falla si falta una sección o está vacía. El tamaño de los archivos del plan sigue generando solo advertencias.
 2. Revisas la división y, si está bien, la apruebas tú desde tu terminal con `./swarm plan approve`. El comando se niega a correr dentro de un agente, y mientras el plan esté en `draft` el swarm rechaza cualquier handoff del specifier al coder.
 3. El specifier entrega **solo la siguiente feature lista** (`task:` = id de la feature). El swarm rechaza el handoff si no hay plan aprobado, si el id no existe, si la feature no está `pending`, si sus dependencias no están `merged` o si hay otra feature en curso. Al encolarse, la feature pasa a `coding`. La aprobación guarda un hash del contenido del plan (sin los estados) en `~/.swarmforge/approvals/`; si el specifier modifica `plan.json` o algún `.md` después de aprobar, el handoff se rechaza hasta que vuelvas a ejecutar `./swarm plan approve`. Es un control de integridad, no una barrera de seguridad.
 4. El coder ve la visión general más solo el slice de su feature; nunca las demás.
@@ -261,13 +263,37 @@ Comandos (se ejecutan desde la raíz del proyecto o desde cualquier worktree; el
 
 | Comando | Qué hace |
 | --- | --- |
-| `./swarm plan validate` | Valida el plan: errores (campos, ids duplicados, dependencias inexistentes o en ciclo, criterios vacíos, archivos faltantes) y advertencias de tamaño. |
+| `./swarm plan validate` | Valida el plan: errores (campos, ids duplicados, dependencias inexistentes o en ciclo, criterios vacíos, archivos faltantes, `decisions.md` con menos decisiones que `min_decisions`, secciones obligatorias ausentes o vacías en una feature) y advertencias de tamaño. |
 | `./swarm plan show` | Muestra el plan completo. |
 | `./swarm plan status` | Estado de cada feature, su commit final y su PR, y cuál es la próxima lista. |
 | `./swarm plan publish <id>` | Publica (o reintenta publicar) una feature en `awaiting_merge`: sube el commit y abre el PR. Solo una persona. |
 | `./swarm plan sync` | Revisa ahora mismo si hay PR mergeados, sincroniza y despacha la siguiente feature. Solo una persona. |
 | `./swarm plan approve` | Valida y aprueba el plan. Solo lo puede ejecutar una persona. |
 | `./swarm plan set-status <id> <estado> [--force]` | Cambia el estado de una feature (`pending`, `coding`, `review`, `arch`, `awaiting_merge`, `merged`). Rechaza saltos ilegales (p. ej. `pending` -> `merged`) salvo con `--force`. Solo una persona. |
+
+## Herramientas Gherkin por plataforma
+
+La plantilla trae las herramientas (`gherkin-parser`, `gherkin-mutator`, `gherkin-ir-dry-checker`) en `template/toolchain/<os>-<arch>/bin/`, donde `<os>` es `linux`, `darwin` o `windows` y `<arch>` es `x64` o `arm64`. `swarm-init` (instalación y `--update`) detecta la plataforma del equipo, copia **solo** el build que corresponde a `.swarmforge/toolchain/bin` y anota el resultado en `.swarmforge/toolchain/PLATFORM`. Si mueves el proyecto a otro SO, `swarm-init --update` reinstala el build correcto.
+
+Builds precompilados incluidos: `linux-x64` y `windows-x64` (en Windows son `.exe`; Git Bash los resuelve por el nombre sin extensión). Para cualquier otra plataforma (`darwin-x64`, `darwin-arm64`, `linux-arm64`, `windows-arm64`) `swarm-init` compila las herramientas desde `vendor/acceptance-pipeline-specification` con `scripts/build_toolchain.sh`, siempre que Go esté en el `PATH`. Sin Go (o si faltan `scripts/build_toolchain.sh` o `vendor/`, que deben estar junto a `swarm-init`) avisa qué falta y cómo arreglarlo y sigue la instalación sin fallar: **si ya había un toolchain instalado se conserva tal cual** (nunca se reemplaza por uno vacío ni incompleto) y `PLATFORM` solo se escribe tras una instalación correcta. Antes de reemplazar, `swarm-init --update` copia el toolchain anterior (`bin/` y `PLATFORM`) a `.swarmforge/backup-<fecha>/.swarmforge/toolchain`. A mano: `scripts/build_toolchain.sh <triple> [carpeta-bin]`, por ejemplo `scripts/build_toolchain.sh darwin-arm64 .swarmforge/toolchain/bin`.
+
+Al arrancar, `./swarm` **ejecuta** cada herramienta (`--version`, con timeout corto y sin shell) y la clasifica como `ok`, `missing` o `wrong-platform`/`not-executable`. Si alguna no sirve, avisa con el SO/arquitectura detectados, indica cómo arreglarlo (`swarm-init --update` o `scripts/build_toolchain.sh <triple>`, y si `PLATFORM` no coincide con el equipo, lo menciona) y deja el detalle en `.swarmforge/toolchain-check.txt`; no es fatal (los proyectos sin Gherkin no la necesitan). El specifier lee ese archivo y, si hay herramientas inutilizables, no genera `.feature` y lo deja dicho en `general.md`.
+
+Alternativa: correr el swarm dentro de WSL/Linux, donde el build `linux-x64` funciona tal cual. En Windows se prefiere `<herramienta>.exe` o `.cmd` sobre el archivo sin extensión, así que también sirve un wrapper propio, por ejemplo `.swarmforge/toolchain/bin/gherkin-parser.cmd`:
+
+```
+@wsl gherkin-parser %*
+```
+
+Las herramientas se prueban en paralelo (timeout de 3 s cada una; si una se cuelga se mata su árbol de procesos). Si una herramienta se resuelve desde el `PATH` y no desde `.swarmforge/toolchain/bin`, el aviso y `.swarmforge/toolchain-check.txt` lo indican junto con la ruta usada. El swarm no descarga binarios por su cuenta.
+
+Para refrescar los precompilados (mantenimiento): `scripts/build_toolchain.sh linux-x64` y `scripts/build_toolchain.sh windows-x64` (o `--all`) reescriben `template/toolchain/<triple>/bin`. Los binarios se marcan como `binary` en `.gitattributes` para que Git no los altere.
+
+## Notas de uso
+
+- **Esfuerzo del specifier**: es el rol que entrevista y escribe las especificaciones de las que depende todo lo demás, así que `swarm-init` propone `high` (en vez de `medium`) como esfuerzo por defecto para el specifier. Se aplica a los agentes que aceptan `--effort`/reasoning (p. ej. `claude`, `codex`).
+- **`swarm` en el PATH de los agentes**: el comando de lanzamiento agrega la raíz del proyecto al **final** del `PATH` de cada agente, para que puedan ejecutar `swarm plan status`, etc., sin que nada del proyecto tape comandos del sistema. Los agentes ya existentes lo reciben al relanzarse.
+- **Un solo repositorio**: el swarm trabaja sobre un único repo. Si el trabajo toca otros repos, el specifier debe escribir la parte del otro repo como un archivo de especificación (por ejemplo `bk-repo-spec.md`) para implementarla allí por separado, en vez de intentar tocar ambos desde este swarm.
 
 ## Memoria compartida (engram)
 

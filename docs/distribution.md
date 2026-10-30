@@ -62,6 +62,12 @@ gh release create "$VERSION" \
     --generate-notes
 ```
 
+## Toolchain Gherkin por plataforma
+
+`template/toolchain/<triple>/bin/` guarda los binarios estáticos de Go (`gherkin-parser`, `gherkin-mutator`, `gherkin-ir-dry-checker`) por plataforma (`<linux|darwin|windows>-<x64|arm64>`; en Windows con `.exe`). Hoy están precompilados `linux-x64` y `windows-x64`. `install_swarm.sh` detecta la plataforma y la pasa a `swarm-init` por `SWARMFORGE_PLATFORM`; `swarm-init` (sin esa variable usa su propia detección) copia solo el build del equipo a `.swarmforge/toolchain/bin` y escribe `.swarmforge/toolchain/PLATFORM`. Para una plataforma sin precompilado compila desde `vendor/acceptance-pipeline-specification` con `scripts/build_toolchain.sh` si hay Go; si no, avisa y continúa. `scripts/build_toolchain.sh` y `vendor/` deben permanecer junto a `swarm-init` (copia completa del repositorio) para que la compilación bajo demanda funcione. `PLATFORM` solo se escribe tras una instalación completa; si no se puede instalar nada, un toolchain existente se conserva sin tocar y en una instalación nueva el directorio no se crea. El respaldo `.swarmforge/backup-<timestamp>/` de `--update` incluye `.swarmforge/toolchain` completo (`bin/` y `PLATFORM`) tal como estaba antes de reemplazarlo.
+
+Para refrescar los precompilados antes de un release (tras cambiar el código Go de `vendor/`): `scripts/build_toolchain.sh linux-x64` y `scripts/build_toolchain.sh windows-x64`, y commitear `template/toolchain/`. `scripts/build_toolchain.sh --dry-run <triple>` imprime los comandos `go build` sin ejecutarlos.
+
 ## Variables de entorno de `install_swarm.sh`
 
 | Variable | Default | Función |

@@ -535,18 +535,25 @@ choose_thinking() {
   local role="$1"
   local -a levels=(off minimal low medium high xhigh max)
   local selection
+  # The specifier runs the interview and writes the specs everything else
+  # builds on, so it defaults to a higher effort than the other roles.
+  local default_level="medium" default_index=4
+  if [[ "$role" == "specifier" ]]; then
+    default_level="high"
+    default_index=5
+  fi
   while :; do
     header "Rol: ${role}"
     mprintf '%sSelecciona el nivel de reasoning/thinking (effort):%s\n' "$BOLD" "$RESET"
     local i=1
     for level in "${levels[@]}"; do
       local marker=""
-      [[ "$level" == "medium" ]] && marker=" ${DIM}(predeterminado)${RESET}"
+      [[ "$level" == "$default_level" ]] && marker=" ${DIM}(predeterminado)${RESET}"
       mprintf '  %d) %s%s\n' "$i" "$level" "$marker"
       ((i++))
     done
-    read -r -p "Nivel [1-${#levels[@]}] (Enter para medium): " selection
-    selection="${selection:-4}"
+    read -r -p "Nivel [1-${#levels[@]}] (Enter para ${default_level}): " selection
+    selection="${selection:-$default_index}"
     if [[ "$selection" =~ ^[0-9]+$ ]]; then
       local idx=$((selection - 1))
       if ((idx >= 0 && idx < ${#levels[@]})); then
@@ -688,6 +695,125 @@ replace_dir() {
   rm -rf "$old"
 }
 
+# host_triple: the platform triple (<os>-<arch>) the toolchain must match, e.g.
+# windows-x64. Same mapping as install_swarm.sh detect_platform; install_swarm.sh
+# hands its result over through SWARMFORGE_PLATFORM, which also lets tests and
+# cross-installs pick a triple explicitly.
+host_triple() {
+  local os arch machine
+  if [[ -n "${SWARMFORGE_PLATFORM:-}" ]]; then
+    if [[ ! "$SWARMFORGE_PLATFORM" =~ ^(linux|darwin|windows)-(x64|arm64)$ ]]; then
+      echo "SWARMFORGE_PLATFORM='$SWARMFORGE_PLATFORM' no es válido (usa <linux|darwin|windows>-<x64|arm64>)." >&2
+      return 1
+    fi
+    printf '%s\n' "$SWARMFORGE_PLATFORM"
+    return 0
+  fi
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    MINGW* | MSYS* | CYGWIN*) os=windows ;;
+    *)
+      echo "Sistema operativo no soportado para el toolchain: $(uname -s)." >&2
+      return 1
+      ;;
+  esac
+  machine="$(uname -m)"
+  if [[ "$os" == windows ]]; then
+    # Git Bash may report x86_64 on Windows-on-ARM; the Windows environment knows.
+    machine="${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE:-$machine}}"
+  fi
+  case "$machine" in
+    x86_64 | amd64 | AMD64 | x64) arch=x64 ;;
+    arm64 | aarch64 | ARM64) arch=arm64 ;;
+    *)
+      echo "Arquitectura no soportada para el toolchain: $machine." >&2
+      return 1
+      ;;
+  esac
+  printf '%s-%s\n' "$os" "$arch"
+}
+
+have_go() {
+  command -v go >/dev/null 2>&1
+}
+
+# install_toolchain <state-dir>: install the Gherkin tools matching this host
+# into <state-dir>/toolchain/bin and record the triple in toolchain/PLATFORM.
+# Uses the prebuilt template/toolchain/<triple>/bin when it exists, otherwise
+# builds from the vendored Go sources if Go is available. Only a SUCCESSFUL
+# install replaces <state-dir>/toolchain (via replace_dir, which restores the
+# previous one on failure) and writes PLATFORM. When nothing could be installed
+# it only warns: an existing toolchain is kept untouched, and on a fresh init
+# the directory stays absent (projects without Gherkin do not need it). A failed
+# copy of a prebuilt is an error.
+install_toolchain() {
+  local state="$1" triple stage src builder vendor tool suffix="" installed=0 missing_tool=0
+  builder="${SWARMFORGE_BUILD_TOOLCHAIN:-$SCRIPT_DIR/scripts/build_toolchain.sh}"
+  vendor="${SWARMFORGE_TOOLCHAIN_SRC:-$SCRIPT_DIR/vendor/acceptance-pipeline-specification}"
+  triple="$(host_triple)" || triple=""
+  stage="$(mktemp -d)" || return 1
+  chmod 755 "$stage" 2>/dev/null || true # mktemp -d is 0700; the copy becomes toolchain/
+  mkdir -p "$stage/bin" || { rm -rf "$stage"; return 1; }
+
+  if [[ -z "$triple" ]]; then
+    echo "Advertencia: no se pudo determinar la plataforma; no se instalan las herramientas Gherkin." >&2
+  else
+    [[ "$triple" == windows-* ]] && suffix=".exe"
+    src="$TEMPLATE_DIR/toolchain/$triple/bin"
+    if [[ -d "$src" ]]; then
+      if ! cp -R "$src/." "$stage/bin/"; then
+        rm -rf "$stage"
+        echo "No se pudieron copiar las herramientas Gherkin de $src." >&2
+        return 1
+      fi
+      [[ -n "$(ls -A "$stage/bin")" ]] && installed=1
+    elif [[ ! -f "$builder" || ! -d "$vendor" ]]; then
+      echo "Advertencia: no hay herramientas Gherkin precompiladas para $triple y faltan scripts/build_toolchain.sh" >&2
+      echo "  o vendor/acceptance-pipeline-specification junto a swarm-init, así que no se pueden compilar." >&2
+      echo "  Usa una copia completa del repositorio de SwarmForge (o WSL)." >&2
+    elif have_go; then
+      mprintf 'No hay herramientas Gherkin precompiladas para %s; compilando desde el código fuente (Go)...\n' "$triple"
+      if bash "$builder" "$triple" "$stage/bin"; then
+        for tool in gherkin-parser gherkin-mutator gherkin-ir-dry-checker; do
+          [[ -f "$stage/bin/$tool$suffix" ]] || missing_tool=1
+        done
+        ((missing_tool)) || installed=1
+      fi
+      if ((!installed)); then
+        echo "Advertencia: falló la compilación de las herramientas Gherkin para $triple." >&2
+        echo "  Revisa el error de Go y ejecuta de nuevo, o compila a mano:" >&2
+        echo "  scripts/build_toolchain.sh $triple $state/toolchain/bin (alternativa: WSL)." >&2
+      fi
+    else
+      echo "Advertencia: no hay herramientas Gherkin precompiladas para $triple y Go no está instalado." >&2
+      echo "  Instala Go (https://go.dev/dl/) y vuelve a ejecutar 'swarm-init --update'," >&2
+      echo "  o ejecuta: scripts/build_toolchain.sh $triple $state/toolchain/bin" >&2
+      echo "  (alternativa: correr el swarm dentro de WSL). La instalación continúa sin ellas." >&2
+    fi
+  fi
+
+  if ((!installed)); then
+    if [[ -d "$state/toolchain/bin" && -n "$(ls -A "$state/toolchain/bin" 2>/dev/null)" ]]; then
+      echo "  Se conservó el toolchain existente en $state/toolchain (no se reemplazó)." >&2
+    fi
+    rm -rf "$stage"
+    return 0
+  fi
+
+  case "$triple" in
+    windows-*) ;;
+    *) chmod +x "$stage"/bin/* 2>/dev/null || true ;;
+  esac
+  printf '%s\n' "$triple" >"$stage/PLATFORM" || { rm -rf "$stage"; return 1; }
+  mkdir -p "$state" || { rm -rf "$stage"; return 1; }
+  if ! replace_dir "$stage" "$state/toolchain"; then
+    rm -rf "$stage"
+    return 1
+  fi
+  rm -rf "$stage"
+}
+
 # install_owned_files <stage> <state-dir>: replace everything the template owns.
 install_owned_files() {
   local stage="$1" state="$2" role
@@ -700,8 +826,7 @@ install_owned_files() {
   done
   install -m 0755 "$TEMPLATE_DIR/swarm" "$TARGET/swarm" || return 1
   install -m 0755 "$TEMPLATE_DIR/swarm.cmd" "$TARGET/swarm.cmd" || return 1
-  mkdir -p "$state" || return 1
-  replace_dir "$TEMPLATE_DIR/toolchain" "$state/toolchain" || return 1
+  install_toolchain "$state" || return 1
 }
 
 # pid_alive <pid>: is that process running? Python's os.getpid() on Windows
@@ -1171,7 +1296,7 @@ EOF
 } >"$config_file"
 
 mkdir -p "$TARGET/.swarmforge"
-cp -R "$TEMPLATE_DIR/toolchain" "$TARGET/.swarmforge/toolchain"
+install_toolchain "$TARGET/.swarmforge" || exit 1
 
 fill_languages "$TARGET/swarmforge"
 

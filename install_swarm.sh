@@ -273,6 +273,9 @@ fi
 
 [[ -x "$LOCAL_BUNDLE" ]] || err "TUI bundle missing or not executable at $LOCAL_BUNDLE."
 
+# swarm-init installs the Gherkin toolchain build matching this platform.
+export SWARMFORGE_PLATFORM="$PLATFORM"
+
 # An existing install is UPDATED in place (scripts, role prompts, constitution,
 # launchers, TUI, toolchain; swarmforge.conf is reconciled, not overwritten).
 # swarm-init --update checks for a running swarm and uncommitted work first and

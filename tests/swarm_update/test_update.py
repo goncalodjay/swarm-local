@@ -51,8 +51,9 @@ def git(cwd, *args):
     )
 
 
-def run_update(project, *args, stdin="", assume_tty=False):
+def run_update(project, *args, stdin="", assume_tty=False, extra_env=None):
     env = dict(os.environ)
+    env.update(extra_env or {})
     if assume_tty:
         env["SWARMFORGE_ASSUME_TTY"] = "1"
     else:
@@ -231,6 +232,27 @@ class UpdateTests(unittest.TestCase):
         self.assertNotIn("reviewer", self.conf_text())
         self.assertIn(STALE_MARKER, self.coder_prompt())
 
+    def test_update_installs_the_toolchain_for_the_host_and_records_it(self):
+        self.make_install()
+        result = run_update(self.project, "--yes", extra_env={"SWARMFORGE_PLATFORM": "windows-x64"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        tc = self.project / ".swarmforge" / "toolchain"
+        self.assertEqual((tc / "PLATFORM").read_text(encoding="utf-8").strip(), "windows-x64")
+        self.assertTrue((tc / "bin" / "gherkin-parser.exe").is_file())
+        self.assertFalse((tc / "bin" / "gherkin-parser").exists())
+
+    def test_update_reinstalls_toolchain_when_platform_changed(self):
+        self.make_install()
+        old = self.project / ".swarmforge" / "toolchain"
+        (old / "bin").mkdir(parents=True)
+        (old / "bin" / "gherkin-parser.exe").write_bytes(b"MZ-old")
+        (old / "PLATFORM").write_text("windows-x64\n", encoding="utf-8")
+        result = run_update(self.project, "--yes", extra_env={"SWARMFORGE_PLATFORM": "linux-x64"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((old / "PLATFORM").read_text(encoding="utf-8").strip(), "linux-x64")
+        self.assertTrue((old / "bin" / "gherkin-parser").is_file())
+        self.assertFalse((old / "bin" / "gherkin-parser.exe").exists())
+
     def test_gitignore_entries_are_appended_never_removed(self):
         self.make_install()
         ignore = self.project / ".gitignore"
@@ -379,6 +401,220 @@ class SafetyTests(unittest.TestCase):
         result = run_bash(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["openai\tOpenAI", "anthropic\tAnthropic"])
+
+
+@unittest.skipUnless(BASH, "needs bash")
+class ToolchainInstallTests(unittest.TestCase):
+    """install_toolchain against a fake template (no real binaries)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.template = self.root / "template"
+        for triple, suffix in (("linux-x64", ""), ("windows-x64", ".exe")):
+            bin_dir = self.template / "toolchain" / triple / "bin"
+            bin_dir.mkdir(parents=True)
+            (bin_dir / f"gherkin-parser{suffix}").write_text(triple, encoding="utf-8")
+        self.state = self.root / "proj" / ".swarmforge"
+        self.builder = self.root / "fake_builder.sh"
+        (self.root / "vendor" / "acceptance-pipeline-specification").mkdir(parents=True)
+        self.builder.write_text(
+            '#!/usr/bin/env bash\nmkdir -p "$2"\nsfx=""\n[[ "$1" == windows-* ]] && sfx=.exe\n'
+            'for t in gherkin-parser gherkin-mutator gherkin-ir-dry-checker; do printf built-%s "$1" >"$2/$t$sfx"; done\n',
+            encoding="utf-8", newline="\n")
+        self.chmod_log = self.root / "chmod.log"
+
+    def seed_existing(self, platform="linux-x64"):
+        bin_dir = self.tc("bin")
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "gherkin-parser").write_text("existing", encoding="utf-8")
+        (self.tc("PLATFORM")).write_text(platform + "\n", encoding="utf-8")
+
+    def install(self, platform, go=True, builder=None):
+        script = "\n".join(
+            [
+                'mprintf() { printf "$@"; }',
+                bash_function("replace_dir"),
+                bash_function("host_triple"),
+                bash_function("install_toolchain"),
+                f"have_go() {{ {'true' if go else 'false'}; }}",
+                f'chmod() {{ echo "$@" >>"{self.chmod_log.as_posix()}"; }}',
+                f'TEMPLATE_DIR="{self.template.as_posix()}"',
+                f'SCRIPT_DIR="{self.root.as_posix()}"',
+                f'export SWARMFORGE_BUILD_TOOLCHAIN="{(builder or self.builder).as_posix()}"',
+                f'export SWARMFORGE_PLATFORM="{platform}"',
+                f'install_toolchain "{self.state.as_posix()}"',
+            ]
+        )
+        return run_bash(script)
+
+    def tc(self, *parts):
+        return self.state.joinpath("toolchain", *parts)
+
+    def test_picks_the_prebuilt_for_the_platform(self):
+        for triple, name in (("linux-x64", "gherkin-parser"), ("windows-x64", "gherkin-parser.exe")):
+            result = self.install(triple)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.tc("PLATFORM").read_text(encoding="utf-8").strip(), triple)
+            self.assertEqual(self.tc("bin", name).read_text(encoding="utf-8"), triple)
+            self.assertEqual(sorted(p.name for p in self.tc("bin").iterdir()), [name])
+            self.assertFalse(self.state.joinpath("toolchain.old").exists())
+
+    def test_reinstalls_when_the_recorded_platform_differs(self):
+        self.install("linux-x64")
+        self.install("windows-x64")
+        self.assertEqual(self.tc("PLATFORM").read_text(encoding="utf-8").strip(), "windows-x64")
+        self.assertFalse(self.tc("bin", "gherkin-parser").exists())
+
+    def test_missing_triple_builds_from_source_when_go_exists(self):
+        result = self.install("darwin-arm64", go=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tc("bin", "gherkin-parser").read_text(encoding="utf-8"), "built-darwin-arm64")
+        self.assertEqual(len(list(self.tc("bin").iterdir())), 3)
+        self.assertEqual(self.tc("PLATFORM").read_text(encoding="utf-8").strip(), "darwin-arm64")
+
+    def test_missing_triple_without_go_warns_and_does_not_fail(self):
+        result = self.install("darwin-arm64", go=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Go no est", result.stderr)
+        self.assertIn("darwin-arm64", result.stderr)
+        self.assertIn("build_toolchain.sh darwin-arm64", result.stderr)
+        self.assertFalse(self.tc().exists())
+
+    def test_without_go_an_existing_toolchain_is_kept(self):
+        self.seed_existing()
+        result = self.install("darwin-arm64", go=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tc("bin", "gherkin-parser").read_text(encoding="utf-8"), "existing")
+        self.assertEqual(self.tc("PLATFORM").read_text(encoding="utf-8").strip(), "linux-x64")
+        self.assertIn("conserv", result.stderr)
+
+    def test_failed_build_is_a_warning_not_an_error(self):
+        self.seed_existing()
+        bad = self.root / "bad_builder.sh"
+        bad.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8", newline="\n")
+        result = self.install("darwin-x64", go=True, builder=bad)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("la compilaci", result.stderr)
+        self.assertIn("build_toolchain.sh darwin-x64", result.stderr)
+        self.assertEqual(self.tc("bin", "gherkin-parser").read_text(encoding="utf-8"), "existing")
+        self.assertEqual(self.tc("PLATFORM").read_text(encoding="utf-8").strip(), "linux-x64")
+
+    def test_partial_build_is_not_installed(self):
+        partial = self.root / "partial_builder.sh"
+        partial.write_text('#!/usr/bin/env bash\nmkdir -p "$2"\nprintf x >"$2/gherkin-parser"\n',
+                           encoding="utf-8", newline="\n")
+        result = self.install("darwin-x64", go=True, builder=partial)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.tc().exists())
+
+    def test_missing_builder_or_vendor_sources_are_reported_not_installed(self):
+        result = self.install("darwin-x64", go=True, builder=self.root / "nope.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("faltan scripts/build_toolchain.sh", result.stderr)
+        self.assertFalse(self.tc().exists())
+        shutil.rmtree(self.root / "vendor")
+        result = self.install("darwin-x64", go=True)
+        self.assertIn("faltan scripts/build_toolchain.sh", result.stderr)
+        self.assertFalse(self.tc().exists())
+
+    def test_rerun_with_matching_platform_is_idempotent(self):
+        self.install("windows-x64")
+        result = self.install("windows-x64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in self.tc("bin").iterdir()), ["gherkin-parser.exe"])
+        self.assertEqual(self.tc("PLATFORM").read_text(encoding="utf-8").strip(), "windows-x64")
+        self.assertFalse(self.state.joinpath("toolchain.old").exists())
+
+    def test_old_flat_layout_without_platform_file_is_replaced(self):
+        old = self.tc("bin")
+        old.mkdir(parents=True)
+        (old / "gherkin-parser").write_text("legacy", encoding="utf-8")
+        (old / "gherkin-legacy-only").write_text("legacy", encoding="utf-8")
+        result = self.install("windows-x64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in old.iterdir()), ["gherkin-parser.exe"])
+        self.assertEqual(self.tc("PLATFORM").read_text(encoding="utf-8").strip(), "windows-x64")
+
+    def test_chmod_runs_on_unix_triples_and_is_skipped_on_windows(self):
+        self.install("windows-x64")
+        self.assertNotIn("+x", self.chmod_log.read_text(encoding="utf-8") if self.chmod_log.exists() else "")
+        self.install("linux-x64")
+        self.assertIn("+x", self.chmod_log.read_text(encoding="utf-8"))
+
+    def host_triple_with(self, uname_s, uname_m, **env):
+        script = "\n".join(
+            [
+                bash_function("host_triple"),
+                f'uname() {{ if [[ "$1" == -s ]]; then echo {uname_s}; else echo {uname_m}; fi; }}',
+                "unset SWARMFORGE_PLATFORM PROCESSOR_ARCHITEW6432 PROCESSOR_ARCHITECTURE",
+                *[f'export {k}="{v}"' for k, v in env.items()],
+                "host_triple",
+            ]
+        )
+        return run_bash(script)
+
+    def test_windows_arch_comes_from_the_windows_environment(self):
+        cases = [
+            ({"PROCESSOR_ARCHITECTURE": "ARM64"}, "windows-arm64"),
+            ({"PROCESSOR_ARCHITEW6432": "ARM64", "PROCESSOR_ARCHITECTURE": "AMD64"}, "windows-arm64"),
+            ({"PROCESSOR_ARCHITECTURE": "AMD64"}, "windows-x64"),
+            ({}, "windows-x64"),  # falls back to uname -m
+        ]
+        for env, expected in cases:
+            result = self.host_triple_with("MINGW64_NT-10.0", "x86_64", **env)
+            self.assertEqual(result.stdout.strip(), expected, (env, result.stderr))
+
+    def test_non_windows_arch_comes_from_uname(self):
+        self.assertEqual(self.host_triple_with("Darwin", "arm64").stdout.strip(), "darwin-arm64")
+        self.assertEqual(self.host_triple_with("Linux", "aarch64", PROCESSOR_ARCHITECTURE="AMD64").stdout.strip(),
+                         "linux-arm64")
+
+    def test_invalid_platform_override_installs_nothing_but_does_not_fail(self):
+        result = self.install("plan9-x64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no es v", result.stderr)
+        self.assertFalse(self.tc("PLATFORM").exists())
+
+
+@unittest.skipUnless(BASH, "needs bash")
+class BuildToolchainScriptTests(unittest.TestCase):
+    script = REPO / "scripts" / "build_toolchain.sh"
+
+    def dry_run(self, *args):
+        return subprocess.run([BASH, self.script.as_posix(), "--dry-run", *args],
+                              capture_output=True, text=True, timeout=60)
+
+    def test_triple_maps_to_goos_and_goarch(self):
+        cases = {
+            "windows-x64": ("windows", "amd64", ".exe"),
+            "windows-arm64": ("windows", "arm64", ".exe"),
+            "darwin-arm64": ("darwin", "arm64", ""),
+            "darwin-x64": ("darwin", "amd64", ""),
+            "linux-x64": ("linux", "amd64", ""),
+            "linux-arm64": ("linux", "arm64", ""),
+        }
+        for triple, (goos, goarch, suffix) in cases.items():
+            result = self.dry_run(triple, "/out/bin")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = result.stdout.strip().splitlines()
+            self.assertEqual(len(lines), 3)
+            self.assertIn(f"GOOS={goos} GOARCH={goarch} go build", lines[0])
+            self.assertIn("CGO_ENABLED=0", lines[0])
+            self.assertIn(f"-o /out/bin/gherkin-parser{suffix} ./cmd/gherkin-parser", lines[0])
+
+    def test_all_covers_every_triple(self):
+        result = self.dry_run("--all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(result.stdout.strip().splitlines()), 18)
+        self.assertIn("template/toolchain/windows-x64/bin/gherkin-mutator.exe", result.stdout)
+
+    def test_unsupported_triple_fails(self):
+        for bad in ("freebsd-x64", "linux-riscv", "linux"):
+            result = self.dry_run(bad)
+            self.assertEqual(result.returncode, 1, bad)
+            self.assertIn("Unsupported triple", result.stderr)
 
 
 if __name__ == "__main__":
