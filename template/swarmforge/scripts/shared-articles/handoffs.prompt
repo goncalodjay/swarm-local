@@ -39,6 +39,11 @@ The swarm is a cycle. Each role has a fixed set of allowed recipients:
   re-reviews after rework); `verdict: fail` goes to the coder only. When the
   plan's review round cap is reached, a failing review is escalated to the
   architect only, and the swarm rejects it if addressed to the coder.
+- Before every handoff to the coder, the specifier syncs with the remote:
+  `git fetch origin --prune`, then `git pull --ff-only` on the base branch, and
+  uses `git rev-parse --short=10 HEAD` as `commit:`. The swarm rejects a commit
+  that is behind the base branch. If the pull cannot fast-forward, the
+  specifier stops and tells the user instead of sending a stale commit.
 - The reviewer and the architect each forward a git_handoff to exactly one role (a note may go to several recipients within your row).
 - A handoff reaching the specifier from the architect means the feature is
   complete. The swarm publishes it as a pull request for the user to review
@@ -69,6 +74,8 @@ message: <one line, max 80 chars>
 
 ## Receiving Handoffs
 - When notified, run `ready_for_next.sh`.
+- If you are woken or told to check your inbox, only run `ready_for_next.sh`;
+  never start another agent or role.
 - `ready_for_next.sh` dispatches to the task or batch helper configured for
   your role.
 - If it prints `NO_TASK`, stop waiting for work.
@@ -80,6 +87,10 @@ message: <one line, max 80 chars>
 - Use only the task information printed by the helper scripts.
 - If a pane wake-up arrives while already working on a task, ignore it.
 - When the task or batch is fully complete, run `done_with_current.sh`.
+- The coder, reviewer and architect must send their own `git_handoff` for the
+  task BEFORE running `done_with_current.sh`; it refuses (`REPLY_REQUIRED`)
+  otherwise. Only if a step legitimately ends without a reply, run
+  `done_with_current.sh --no-reply`.
 - `note` handoffs are tasks too; after reading or acting on a note, run
   `done_with_current.sh` before accepting any other handoff.
 - If `done_with_current.sh` prints `TASK: <path>`, treat the printed `PAYLOAD`

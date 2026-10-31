@@ -420,6 +420,101 @@ class SyncAndDispatchTests(FlowCase):
         self.flow.poll_merges(self.roles, force=True)
         self.assertEqual(len(self.outbox("specifier")), 1)
 
+    def add_swarm_copies(self):
+        """What ./swarm leaves untracked in every role worktree: a copy of the scripts."""
+        for name in ("coder", "reviewer", "architect"):
+            wt = Path(self.roles[name]["worktree-path"])
+            (wt / "swarmforge" / "scripts").mkdir(parents=True, exist_ok=True)
+            (wt / "swarmforge" / "scripts" / "x.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (wt / ".swarmforge" / "toolchain").mkdir(parents=True, exist_ok=True)
+            (wt / ".swarmforge" / "toolchain" / "t").write_text("t\n", encoding="utf-8")
+
+    def test_untracked_swarm_copies_do_not_block_sync_and_dispatch(self):
+        # Regression: every worktree carries an untracked swarmforge/ copy, which
+        # made `git status` dirty, so sync (and with it the auto-dispatch of the
+        # next feature, auto_next being on by default) was deferred forever.
+        self.add_swarm_copies()
+        self.merge()
+        self.assertNotIn("auto_next", planlib.load(self.plan_dir))
+        actions = self.flow.poll_merges(self.roles, force=True)
+        self.assertTrue(any("dispatched 'b'" in a for a in actions), actions)
+        for name in ("coder", "reviewer", "architect"):
+            wt = self.roles[name]["worktree-path"]
+            self.assertEqual(git(wt, "rev-parse", "HEAD"), self.final, name)
+            self.assertTrue((Path(wt) / "swarmforge" / "scripts" / "x.sh").is_file(), name)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.final)
+        (handoff,) = self.outbox("specifier")
+        self.assertEqual(self.read_headers(handoff)["task"], "b")
+        self.assertEqual(self.feat("b")["status"], "coding")
+
+    def test_tracked_change_still_defers_even_with_untracked_swarm_copies(self):
+        self.add_swarm_copies()
+        self.merge()
+        coder = Path(self.roles["coder"]["worktree-path"])
+        (coder / "f.txt").write_text("half-done work\n", encoding="utf-8")
+        self.assertEqual(self.flow.poll_merges(self.roles, force=True), ["feature 'a' merged"])
+        self.assertEqual((coder / "f.txt").read_text(encoding="utf-8"), "half-done work\n")
+        self.assertEqual(self.feat("b")["status"], "pending")
+        self.assertEqual(self.outbox("specifier"), [])
+        log = (self.root / ".swarmforge" / "logs" / "plan-flow.log").read_text(encoding="utf-8")
+        self.assertIn("uncommitted or untracked changes", log)
+        self.assertIn("NOT dispatched", log)
+
+    def test_untracked_copy_colliding_with_the_new_base_is_explained_and_noted(self):
+        arch = Path(self.roles["architect"]["worktree-path"])
+        (arch / "swarmforge").mkdir()
+        (arch / "swarmforge" / "README.md").write_text("tracked now\n", encoding="utf-8")
+        git(arch, "add", "swarmforge/README.md")
+        git(arch, "commit", "-q", "-m", "track swarmforge")
+        self.final = git(arch, "rev-parse", "HEAD")
+        self.gh.oid = self.final
+        self.gh.set_view()
+        self.add_swarm_copies()
+        self.merge()
+        with mock.patch.object(plan_flow, "DEFER_NOTE_AFTER", 1):
+            self.flow.poll_merges(self.roles, force=True)
+        self.assertEqual(self.feat("b")["status"], "pending")
+        log = (self.root / ".swarmforge" / "logs" / "plan-flow.log").read_text(encoding="utf-8")
+        self.assertIn("untracked path 'swarmforge/' collides", log)
+        self.assertIn("move or delete that untracked copy", log)
+        self.assertNotIn("ignored path 'swarmforge", log)
+        texts = [p.read_text(encoding="utf-8") for p in self.outbox("architect")]
+        self.assertTrue(any("keeps being deferred" in self.read_headers(p)["message"]
+                            and "move or delete that untracked copy" in p.read_text(encoding="utf-8")
+                            for p in self.outbox("architect")), texts)
+
+    def test_other_untracked_files_still_defer(self):
+        self.merge()
+        coder = Path(self.roles["coder"]["worktree-path"])
+        (coder / "scratch.txt").write_text("mine\n", encoding="utf-8")
+        self.flow.poll_merges(self.roles, force=True)
+        self.assertEqual(self.feat("b")["status"], "pending")
+        self.assertTrue((coder / "scratch.txt").exists())
+
+    def test_swarm_owned_untracked_matching(self):
+        for path in ("swarmforge/", "swarmforge/scripts/x.sh", ".swarmforge/", '"swarmforge/a b"'):
+            self.assertTrue(plan_flow.swarm_owned_untracked(path), path)
+        for path in ("swarmforge2/", "src/swarmforge/x", "swarm", "f.txt"):
+            self.assertFalse(plan_flow.swarm_owned_untracked(path), path)
+
+    def test_dispatch_uses_the_fetched_tip_of_the_base_not_a_stale_commit(self):
+        self.merge()
+        other = Path(self._tmp.name) / "other"
+        git(Path(self._tmp.name), "clone", "-q", str(self.origin), str(other))
+        git(other, "config", "user.email", "t@example.com")
+        git(other, "config", "user.name", "t")
+        (other / "later.txt").write_text("later\n", encoding="utf-8")
+        git(other, "add", "later.txt")
+        git(other, "commit", "-q", "-m", "someone else pushed")
+        git(other, "push", "-q", "origin", "master")
+        tip = git(other, "rev-parse", "HEAD")
+        self.flow.poll_merges(self.roles, force=True)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), tip)
+        self.assertEqual(git(self.roles["coder"]["worktree-path"], "rev-parse", "HEAD"), tip)
+        (handoff,) = self.outbox("specifier")
+        self.assertEqual(self.read_headers(handoff)["commit"], tip[:10])
+        self.assertEqual(self.feat("b")["base_commit"], tip)
+
     def test_dispatch_respects_the_approval_gate(self):
         self.merge()
         (self.plan_dir / "general.md").write_text("tampered after approval\n", encoding="utf-8")

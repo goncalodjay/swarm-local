@@ -136,7 +136,8 @@ def locate_plan_dir(cwd=None):
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
-            capture_output=True, text=True, cwd=str(cwd),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(cwd),
         )
         if r.returncode == 0 and r.stdout.strip():
             common = Path(r.stdout.strip())
@@ -159,7 +160,8 @@ def _master_checkout(cwd):
     try:
         r = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            capture_output=True, text=True, cwd=str(cwd),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(cwd),
         )
     except OSError:
         return None
@@ -190,7 +192,7 @@ def git_origin_url(root):
     try:
         r = subprocess.run(
             ["git", "remote", "get-url", "origin"], capture_output=True, text=True,
-            cwd=str(root), timeout=15, stdin=subprocess.DEVNULL)
+            encoding="utf-8", errors="replace", cwd=str(root), timeout=15, stdin=subprocess.DEVNULL)
     except (subprocess.SubprocessError, OSError):
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
@@ -1322,8 +1324,8 @@ def detect_base_branch(root):
     def run(*args):
         try:
             r = subprocess.run(
-                ["git", *args], capture_output=True, text=True, cwd=str(root),
-                timeout=15, stdin=subprocess.DEVNULL,
+                ["git", *args], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", cwd=str(root), timeout=15, stdin=subprocess.DEVNULL,
             )
         except (subprocess.SubprocessError, OSError):
             return ""
@@ -1336,6 +1338,108 @@ def detect_base_branch(root):
     if remote_head:
         return remote_head[len("origin/"):] if remote_head.startswith("origin/") else remote_head
     return None
+
+
+SKIP_BASE_CHECK_ENV = "SWARMFORGE_SKIP_BASE_CHECK"
+BASE_CHECK_FETCH_TIMEOUT = 30
+
+
+def _run_git_bounded(argv, cwd, timeout):
+    """Run git capturing text; on timeout the whole process tree is killed (a
+    hung ssh/credential helper child would otherwise hold the pipes open and
+    block forever). Returns a CompletedProcess or None; never raises."""
+    from .agent_probe import _kill_process_tree
+    kwargs = {} if os.name == "nt" else {"start_new_session": True}
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace", cwd=str(cwd),
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **kwargs)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc)
+        try:
+            proc.communicate(timeout=2)
+        except (subprocess.SubprocessError, OSError, ValueError):
+            pass
+        return None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        _kill_process_tree(proc)
+        return None
+    return subprocess.CompletedProcess(argv, proc.returncode, out or "", err or "")
+
+
+def base_freshness(plan_dir, commit):
+    """Is `commit` (a specifier -> coder handoff commit) current with the base
+    branch? Returns (errors, warnings).
+
+    After a fresh `git fetch origin`, the tip of `origin/<base>` (or the local
+    base branch when there is no remote) must be the commit or one of its
+    ancestors; otherwise the specifier is handing out a stale checkout and the
+    coder would have to rebase by itself. Fails OPEN (a warning, no error) when
+    the check cannot be done: no remote branch, offline, fetch failure, unknown
+    base. SWARMFORGE_SKIP_BASE_CHECK=1 disables it (tests)."""
+    if os.environ.get(SKIP_BASE_CHECK_ENV) == "1":
+        return [], []
+    root = _project_root(plan_dir)
+
+    def git(*args, timeout=15):
+        return _run_git_bounded(["git", *args], root, timeout)
+
+    def resolve(rev):
+        r = git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+        return r.stdout.strip() if r is not None and r.returncode == 0 else ""
+
+    try:
+        plan = load(plan_dir)
+    except PlanError:
+        return [], []
+    base = plan.get("base_branch")
+    base = base.strip() if isinstance(base, str) and base.strip() else (detect_base_branch(root) or "")
+    if not valid_base_branch(base):
+        return [], [f"Stale-commit check skipped: base branch {base!r} is unknown or unsafe."]
+    remote = git("remote", "get-url", "origin")
+    tip_ref = f"refs/heads/{base}"
+    if remote is not None and remote.returncode == 0:
+        fetched = git("fetch", "origin", timeout=BASE_CHECK_FETCH_TIMEOUT)
+        if fetched is None or fetched.returncode != 0:
+            why = (fetched.stderr.strip() if fetched is not None else "git did not run")
+            return [], [f"Stale-commit check skipped: git fetch origin failed ({why})."]
+        if resolve(f"refs/remotes/origin/{base}"):
+            tip_ref = f"refs/remotes/origin/{base}"
+    tip = resolve(tip_ref)
+    full = resolve(commit)
+    if not tip or not full:
+        return [], [f"Stale-commit check skipped: could not resolve {tip_ref}."]
+    if tip == full:
+        return [], []
+    ancestor = git("merge-base", "--is-ancestor", tip, full)
+    if ancestor is None or ancestor.returncode not in (0, 1):
+        return [], ["Stale-commit check skipped: git could not compare the commits."]
+    if ancestor.returncode == 0:
+        return [], []
+    # The tip is not in the commit's history. Only a commit strictly BEHIND the
+    # tip is stale; a diverged one (e.g. unpushed local commits after a squash
+    # merge) cannot be fixed by `git pull --ff-only`, so it must not block.
+    behind = git("merge-base", "--is-ancestor", full, tip)
+    if behind is None or behind.returncode not in (0, 1):
+        return [], ["Stale-commit check skipped: git could not compare the commits."]
+    if behind.returncode == 1:
+        return [], [
+            f"Local '{base}' has diverged from {tip_ref} (commit {full[:10]} vs tip {tip[:10]}); "
+            f"reconcile by hand (rebase or merge). The handoff is allowed."
+        ]
+    short = full[:10]
+    return [
+        f"Commit {short} is behind the base branch ({tip_ref} is at {tip[:10]}): work was merged "
+        f"or pushed after your checkout was updated. Run `git fetch origin --prune` and "
+        f"`git pull --ff-only` on '{base}', then use `git rev-parse --short=10 HEAD` as the "
+        f"'commit:' header and send the handoff again. If this check is wrong for your setup, "
+        f"set {SKIP_BASE_CHECK_ENV}=1 to skip it."
+    ], []
 
 
 def approve(plan_dir, now_iso):

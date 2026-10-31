@@ -20,6 +20,7 @@ from swarm_python.deps import (
     toolchain_report,
     toolchain_summary,
 )
+from swarm_python.env import utf8_environ
 from swarm_python.git_ops import (
     init_repo_if_missing,
     prepare_handoff_dirs,
@@ -154,7 +155,9 @@ def start_handoff_daemon(ctx):
     command = list(inhibit_prefix) + [sys.executable, str(HANDOFFD), str(ctx.working_dir)]
     log = open(ctx.handoff_daemon_log, "ab")
     try:
-        subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        subprocess.Popen(
+            command, stdout=log, stderr=subprocess.STDOUT, env=utf8_environ(),
+        )
     finally:
         log.close()
     extra = " with OS sleep prevention" if inhibit_prefix else ""

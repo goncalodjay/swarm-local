@@ -15,15 +15,19 @@ def _run(session, *args):
         ["herdr", "--session", session, *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
 def _run_json(session, *args):
     result = _run(session, *args)
-    if not result.stdout.strip():
+    # stdout is None when the reader thread died; treat it as no output.
+    stdout = result.stdout or ""
+    if not stdout.strip():
         return None, result
     try:
-        return json.loads(result.stdout), result
+        return json.loads(stdout), result
     except json.JSONDecodeError:
         return None, result
 

@@ -131,7 +131,10 @@ def _loud_transition_failure(task, why, fix):
 
 def _head_commit():
     try:
-        r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
     except OSError:
         return None
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
@@ -264,6 +267,16 @@ def main():
     if all_errors:
         error_report(draft, all_errors)
         sys.exit(2)
+
+    if _is_feature_handoff(sender, parsed["headers"], validation["recipients"]):
+        stale_errors, stale_warnings = planlib.base_freshness(
+            planlib.locate_plan_dir(), validation["canonical-commit"],
+        )
+        for warning in stale_warnings:
+            print(f"WARNING: {warning}", file=sys.stderr)
+        if stale_errors:
+            error_report(draft, stale_errors)
+            sys.exit(2)
 
     snapshot, gate_errors = mark_feature_coding(
         sender, parsed["headers"], validation["recipients"], validation["canonical-commit"],

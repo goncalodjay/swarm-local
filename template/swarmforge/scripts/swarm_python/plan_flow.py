@@ -64,6 +64,11 @@ DEFER_NOTE_AFTER = 5
 MAX_REPORT_CHARS = 4000
 NO_WORKTREE = ("none", "master")
 PR_FIELDS = "state,baseRefName,headRefName,headRefOid,mergeCommit"
+# Untracked paths the swarm itself puts in every role worktree (a copy of the
+# scripts and the runtime state). They must not make a worktree look dirty,
+# otherwise the post-merge sync would be deferred forever. Tracked changes
+# anywhere, including inside these paths, still block.
+SWARM_OWNED_UNTRACKED = ("swarmforge", ".swarmforge")
 GUARDED_STATE_PATHS = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD")
 
 _REDACTIONS = (
@@ -213,6 +218,12 @@ def extract_report(body):
             continue
         kept.append(line)
     return "\n".join(kept).strip()[:MAX_REPORT_CHARS]
+
+
+def swarm_owned_untracked(porcelain_path):
+    """True for a `git status --porcelain` untracked path under SWARM_OWNED_UNTRACKED."""
+    path = porcelain_path.strip().strip('"').replace("\\", "/").rstrip("/")
+    return any(path == owned or path.startswith(owned + "/") for owned in SWARM_OWNED_UNTRACKED)
 
 
 def _same_path(a, b):
@@ -835,13 +846,21 @@ class PlanFlow:
         status = self._g("status", "--porcelain", "--ignored", cwd=path)
         if status.rc != 0:
             return f"git status failed ({status.err})"
+        collide_check = []
         for line in status.out.splitlines():
-            if not line.startswith("!! "):
+            if line.startswith("!! "):
+                collide_check.append(("ignored", line[3:]))
+            elif line.startswith("?? ") and swarm_owned_untracked(line[3:]):
+                collide_check.append(("untracked", line[3:]))  # checkout must not overwrite it either
+            else:
                 return "has uncommitted or untracked changes"
-        for line in status.out.splitlines():
-            ignored = line[3:].strip().strip('"')
+        for kind, line in collide_check:
+            ignored = line.strip().strip('"')
             tracked = self._g("ls-tree", "-r", "--name-only", head, "--", ignored, cwd=path)
             if tracked.rc != 0 or tracked.out:
+                if kind == "untracked":
+                    return (f"untracked path '{ignored}' collides with files that are tracked in the "
+                            f"new base; move or delete that untracked copy so the worktree can be updated")
                 return f"ignored path '{ignored}' collides with files in the new base"
         old = self._g("rev-parse", "--verify", "--quiet", "HEAD", cwd=path)
         if old.rc == 0 and old.out:
@@ -863,7 +882,8 @@ class PlanFlow:
         message = f"sync of '{fid}' deferred: {why}"
         if message != self._last_deferral:  # log changes only, not every poll
             self._last_deferral = message
-            self._log("sync-deferred", fid, why)
+            self._log("sync-deferred", fid, why,
+                      "- the next feature is NOT dispatched until the sync succeeds; retrying")
         if count >= DEFER_NOTE_AFTER and not feature.get("defer_noted_at"):
             try:
                 self._send_note(

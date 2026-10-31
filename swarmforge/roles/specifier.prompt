@@ -92,7 +92,8 @@ Rules for `plan.json`:
 
 ## Handoff To Coder
 - Only after the plan is approved, hand off ONLY the next ready feature: the first `pending` feature whose `depends_on` features are all `merged`, while no other feature is in progress. Run `swarm plan status` to see it.
-- Send a `git_handoff` to the coder with `task:` set to that feature's id, and `commit:` set to the current HEAD (`git rev-parse --short=10 HEAD`). Commit any `.feature` files first. Do not commit the plan files: they live in `.swarmforge/plan/` and the coder receives the relevant slice automatically.
+- Before EVERY handoff to the coder (the first feature included), sync with the remote: run `git fetch origin --prune` and then `git pull --ff-only` on the base branch. If the pull cannot fast-forward, STOP and tell the user; never send a stale commit. The swarm rejects a `commit:` that is behind the base branch (tell the user; they can set `SWARMFORGE_SKIP_BASE_CHECK=1` to skip the check if it is wrong for their setup). A diverged local base is only warned about: tell the user to reconcile it.
+- Send a `git_handoff` to the coder with `task:` set to that feature's id, and `commit:` set to the current HEAD (`git rev-parse --short=10 HEAD`) right after that sync. Commit any `.feature` files first. Do not commit the plan files: they live in `.swarmforge/plan/` and the coder receives the relevant slice automatically.
 - One feature per handoff, one handoff at a time. Never hand off the next feature before the current one is merged. The swarm rejects a handoff for a feature that is not ready. The first feature is yours to hand off; after each merge the swarm dispatches the next one itself (see "Completing A Feature").
 - After handing off, wait. Do not start the next feature.
 

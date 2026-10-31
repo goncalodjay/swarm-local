@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 from .config import AGENT_WINDOW, RoleRow
-from .env import shell_quote
+from .env import UTF8_ENV, shell_quote
 from .sessions import RESUME_PROMPT, SessionPlan
 
 
@@ -85,7 +85,8 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
     base = (
         f"export SWARMFORGE_ROLE={shell_quote(role)} && "
         f"export ENGRAM_PROJECT={shell_quote(ctx.working_dir.name)} && "
-        f"export PATH={shell_quote(str(role_script_dir))}:"
+        + "".join(f"export {k}={shell_quote(v)} && " for k, v in UTF8_ENV.items())
+        + f"export PATH={shell_quote(str(role_script_dir))}:"
         f"{shell_quote(str(role_tool_bin))}:$PATH:"
         # The project root holds the `swarm` entry point (plan, stop...). It goes
         # LAST so nothing in the project can shadow a system command.

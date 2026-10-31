@@ -55,6 +55,12 @@ EXCLUSIVE_FORWARDS = {
 
 KNOWN_CYCLE_ROLES = frozenset(ROLE_ROUTES)
 
+# Roles that must send a git_handoff of their own for every git_handoff they
+# take on: the work only moves forward when they reply (see done_with_current).
+# The specifier is excluded: the architect's completion handoff ends the chain
+# (the swarm publishes the PR and dispatches the next feature itself).
+REPLY_REQUIRED_ROLES = frozenset({"coder", "reviewer", "architect"})
+
 
 def validate_route(sender, recipients, type_=None):
     """Reject handoffs that leave the cycle defined by ROLE_ROUTES.
@@ -109,10 +115,22 @@ def validate_recipients(to):
     return recipients, errors
 
 
+def _commit_format_error(commit):
+    if len(commit) != 10:
+        return (
+            f"Header 'commit' must be 10 characters (git rev-parse --short=10 HEAD), "
+            f"got {len(commit)}: {commit}"
+        )
+    return (
+        f"Header 'commit' must be 10 hexadecimal characters "
+        f"(git rev-parse --short=10 HEAD), got: {commit}"
+    )
+
+
 def canonical_commit(commit):
     r = subprocess.run(
         ["git", "rev-parse", f"--disambiguate={commit}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     matches = [line for line in r.stdout.splitlines() if line]
     if len(matches) != 1:
@@ -123,7 +141,7 @@ def canonical_commit(commit):
     obj = matches[0]
     r2 = subprocess.run(
         ["git", "cat-file", "-t", obj],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     obj_type = r2.stdout.strip()
     if obj_type != "commit":
@@ -133,7 +151,7 @@ def canonical_commit(commit):
         )
     r3 = subprocess.run(
         ["git", "rev-parse", "--short=10", obj],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     return r3.stdout.strip(), None
 
@@ -227,10 +245,7 @@ def validate(headers, ordered, sender=None, plan_dir=None):
         if not commit:
             commit_error = "Missing required header 'commit' for git_handoff."
         elif not re.fullmatch(r"[0-9a-fA-F]{10}", commit):
-            commit_error = (
-                f"Header 'commit' must be exactly 10 hexadecimal characters; "
-                f"got '{commit}'."
-            )
+            commit_error = _commit_format_error(commit)
         else:
             canonical, commit_error = canonical_commit(commit)
 
@@ -297,6 +312,9 @@ def validate(headers, ordered, sender=None, plan_dir=None):
 
 def error_report(draft_path, errors):
     print(f"HANDOFF INVALID: {draft_path}", file=sys.stderr)
+    if errors:
+        # The usage block below is long; lead with the actual reason.
+        print(f"Reason: {errors[0]}", file=sys.stderr)
     print(file=sys.stderr)
     print("Errors:", file=sys.stderr)
     for e in errors:

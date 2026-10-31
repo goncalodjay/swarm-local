@@ -8,6 +8,7 @@ import os
 import signal
 import threading
 import time
+import traceback
 from dataclasses import replace
 
 from swarm_python import agent_state
@@ -31,6 +32,58 @@ def log(log_file, daemon_dir, *parts):
     line = f"{now_iso()} {' '.join(str(p) for p in parts)}\n"
     with log_file.open("a", encoding="utf-8") as f:
         f.write(line)
+
+
+# A persistent error repeats every poll (1s). Log the first occurrence with its
+# traceback, then only every REPEAT_LOG_EVERY-th consecutive repeat, with a count.
+REPEAT_LOG_EVERY = 60
+
+
+class ErrorThrottle:
+    """Rate-limits identical consecutive errors per label."""
+
+    def __init__(self, every=REPEAT_LOG_EVERY):
+        self.every = every
+        self._seen = {}  # label -> [signature, consecutive count]
+
+    @staticmethod
+    def _signature(exc):
+        """Exception type plus where it was raised, so a message that varies
+        (ids, paths, counters) still coalesces. Without a traceback: type and message."""
+        tb = exc.__traceback__
+        if tb is None:
+            return f"{type(exc).__name__}:{exc}"
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        return f"{type(exc).__name__}@{tb.tb_frame.f_code.co_filename}:{tb.tb_lineno}"
+
+    def register(self, label, exc):
+        """Count one occurrence; returns (should_log, count)."""
+        signature = self._signature(exc)
+        entry = self._seen.get(label)
+        if entry is None or entry[0] != signature:
+            self._seen[label] = [signature, 1]
+            return True, 1
+        entry[1] += 1
+        return entry[1] % self.every == 0, entry[1]
+
+    def clear(self, label):
+        self._seen.pop(label, None)
+
+
+ERRORS = ErrorThrottle()
+
+
+def log_error(log_file, daemon_dir, label, exc):
+    """Log an exception (with traceback) unless it is a throttled repeat."""
+    should_log, count = ERRORS.register(label, exc)
+    if not should_log:
+        return
+    if count == 1:
+        trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        log(log_file, daemon_dir, label, repr(exc), "\n" + trace.rstrip())
+    else:
+        log(log_file, daemon_dir, label, repr(exc), f"(repeated {count} times)")
 
 
 def load_roles(roles_file):
@@ -253,14 +306,16 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None, plan_f
         # Failures are logged and never stop the daemon loop.
         try:
             plan_flow.poll_merges(roles)
+            ERRORS.clear("plan-poll-error")
         except Exception as e:
-            log(log_file, daemon_dir, "plan-poll-error", repr(e))
+            log_error(log_file, daemon_dir, "plan-poll-error", e)
     if scheduler is None or should_stop(stop_file):
         return
     try:
         scheduler.tick(state)
+        ERRORS.clear("scheduler-error")
     except Exception as e:
-        log(log_file, daemon_dir, "scheduler-error", repr(e))
+        log_error(log_file, daemon_dir, "scheduler-error", e)
     agent_state.save(state_dir, state)
 
 
@@ -291,7 +346,14 @@ def main():
                     synchronous=False, **DAEMON_TIMEOUTS)
     try:
         while not should_stop(stop_file):
-            poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler, flow)
+            try:
+                poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler, flow)
+                ERRORS.clear("poll-error")
+            except Exception as e:  # the loop must outlive any single bad poll
+                try:
+                    log_error(log_file, daemon_dir, "poll-error", e)
+                except Exception:
+                    pass
             sleep_poll(POLL_MS, stop_file)
     finally:
         flow.close()
