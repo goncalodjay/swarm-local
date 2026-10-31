@@ -20,6 +20,9 @@ task: <short-stable-task-name>
 commit: <10-character-commit-abbrev>
 ```
 
+- The reviewer adds one more required header to every `git_handoff`: `verdict: pass`
+  or `verdict: fail`. No other role may send `verdict`.
+
 ## Routing Table
 The swarm is a cycle. Each role has a fixed set of allowed recipients:
 
@@ -31,12 +34,21 @@ The swarm is a cycle. Each role has a fixed set of allowed recipients:
 | architect | coder, specifier                            |
 
 - Every role may send work to the coder. The coder answers only to the reviewer.
-- When its review passes, the reviewer ALWAYS forwards to the architect, never
-  directly to the specifier, however small the change and including re-reviews
-  after rework.
+- The reviewer's route follows its verdict: `verdict: pass` goes to the architect
+  only (never directly to the specifier, however small the change and including
+  re-reviews after rework); `verdict: fail` goes to the coder only. When the
+  plan's review round cap is reached, a failing review is escalated to the
+  architect only, and the swarm rejects it if addressed to the coder.
+- Before every handoff to the coder, the specifier syncs with the remote:
+  `git fetch origin --prune`, then `git pull --ff-only` on the base branch, and
+  uses `git rev-parse --short=10 HEAD` as `commit:`. The swarm rejects a commit
+  that is behind the base branch. If the pull cannot fast-forward, the
+  specifier stops and tells the user instead of sending a stale commit.
+- The reviewer and the architect each forward a git_handoff to exactly one role (a note may go to several recipients within your row).
 - A handoff reaching the specifier from the architect means the feature is
-  complete. The specifier merges into the working branch, leaves the result
-  uncommitted for the user to review, and waits for the user's go-ahead.
+  complete. The swarm publishes it as a pull request for the user to review
+  and dispatches the next feature after the user merges it; the specifier only
+  informs the user and handles failure notes.
 - Never send to a recipient outside your row. A misrouted handoff stalls the
   cycle because the specifier never receives its completion signal.
 - Always forward after completing an inbound task, regardless of what changed.
@@ -62,6 +74,8 @@ message: <one line, max 80 chars>
 
 ## Receiving Handoffs
 - When notified, run `ready_for_next.sh`.
+- If you are woken or told to check your inbox, only run `ready_for_next.sh`;
+  never start another agent or role.
 - `ready_for_next.sh` dispatches to the task or batch helper configured for
   your role.
 - If it prints `NO_TASK`, stop waiting for work.
@@ -73,6 +87,10 @@ message: <one line, max 80 chars>
 - Use only the task information printed by the helper scripts.
 - If a pane wake-up arrives while already working on a task, ignore it.
 - When the task or batch is fully complete, run `done_with_current.sh`.
+- The coder, reviewer and architect must send their own `git_handoff` for the
+  task BEFORE running `done_with_current.sh`; it refuses (`REPLY_REQUIRED`)
+  otherwise. Only if a step legitimately ends without a reply, run
+  `done_with_current.sh --no-reply`.
 - `note` handoffs are tasks too; after reading or acting on a note, run
   `done_with_current.sh` before accepting any other handoff.
 - If `done_with_current.sh` prints `TASK: <path>`, treat the printed `PAYLOAD`

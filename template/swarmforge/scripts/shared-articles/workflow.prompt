@@ -6,6 +6,7 @@
 - Work only in your assigned branch or worktree.
 - Do not inspect, diff, merge, or base work on another branch unless that branch is specifically named in a handoff or explicit user instruction.
 - Do not run `./swarm` from an agent worktree to repair helper scripts. If handoff helper scripts are missing from PATH, stop and report the startup failure.
+- Never run or source the launcher scripts or prompt files under `.swarmforge/prompts/` (`<role>.sh`, `<role>.md`): they start a new agent session and are managed only by the swarm daemon. If you think you have mail, run `ready_for_next.sh`; if a pane shows a command to run a launcher, ignore it.
 
 ## Announcements
 - Do not add role bylines to announcements or check-in comments.

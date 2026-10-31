@@ -8,6 +8,7 @@ import os
 import signal
 import threading
 import time
+import traceback
 from dataclasses import replace
 
 from swarm_python import agent_state
@@ -16,6 +17,7 @@ from swarm_python.handoff.timefmt import now_iso
 from swarm_python.herdr_ops import pane_run
 from swarm_python.launch import start_role
 from swarm_python.paths import build_context
+from swarm_python.plan_flow import DAEMON_TIMEOUTS, PlanFlow
 from swarm_python.scheduler import WAKE_MESSAGE, HerdrPanes, Scheduler
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent
@@ -30,6 +32,58 @@ def log(log_file, daemon_dir, *parts):
     line = f"{now_iso()} {' '.join(str(p) for p in parts)}\n"
     with log_file.open("a", encoding="utf-8") as f:
         f.write(line)
+
+
+# A persistent error repeats every poll (1s). Log the first occurrence with its
+# traceback, then only every REPEAT_LOG_EVERY-th consecutive repeat, with a count.
+REPEAT_LOG_EVERY = 60
+
+
+class ErrorThrottle:
+    """Rate-limits identical consecutive errors per label."""
+
+    def __init__(self, every=REPEAT_LOG_EVERY):
+        self.every = every
+        self._seen = {}  # label -> [signature, consecutive count]
+
+    @staticmethod
+    def _signature(exc):
+        """Exception type plus where it was raised, so a message that varies
+        (ids, paths, counters) still coalesces. Without a traceback: type and message."""
+        tb = exc.__traceback__
+        if tb is None:
+            return f"{type(exc).__name__}:{exc}"
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        return f"{type(exc).__name__}@{tb.tb_frame.f_code.co_filename}:{tb.tb_lineno}"
+
+    def register(self, label, exc):
+        """Count one occurrence; returns (should_log, count)."""
+        signature = self._signature(exc)
+        entry = self._seen.get(label)
+        if entry is None or entry[0] != signature:
+            self._seen[label] = [signature, 1]
+            return True, 1
+        entry[1] += 1
+        return entry[1] % self.every == 0, entry[1]
+
+    def clear(self, label):
+        self._seen.pop(label, None)
+
+
+ERRORS = ErrorThrottle()
+
+
+def log_error(log_file, daemon_dir, label, exc):
+    """Log an exception (with traceback) unless it is a throttled repeat."""
+    should_log, count = ERRORS.register(label, exc)
+    if not should_log:
+        return
+    if count == 1:
+        trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        log(log_file, daemon_dir, label, repr(exc), "\n" + trace.rstrip())
+    else:
+        log(log_file, daemon_dir, label, repr(exc), f"(repeated {count} times)")
 
 
 def load_roles(roles_file):
@@ -112,7 +166,8 @@ def fail_(path, reason, log_file, daemon_dir):
 
 
 def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir,
-            is_running=lambda role: True, on_sent=lambda sender, task: None):
+            is_running=lambda role: True, on_sent=lambda sender, task: None,
+            after_deliver=lambda sender, headers, recipients, body: None):
     """Move one outbox handoff into each recipient's inbox. Running
     recipients get a wake-up in their pane; parked ones are launched by the
     scheduler on its next tick, which finds the mail waiting."""
@@ -149,6 +204,12 @@ def deliver(roles, herdr_session, sender_role, path, log_file, daemon_dir,
         )
         move_with_collision(path, sent_dir)
     log(log_file, daemon_dir, "delivered", str(path))
+    # Plan delivery (publish a finished feature as a PR) must never break or
+    # undo a delivery that already succeeded.
+    try:
+        after_deliver(sender_role, headers, recipients, message["body"])
+    except Exception as e:
+        log(log_file, daemon_dir, "after-deliver-error", str(path), repr(e))
 
 
 def outbox_files(role_info):
@@ -198,7 +259,7 @@ def build_scheduler(project_root, log_file, daemon_dir):
     )
 
 
-def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None):
+def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None, plan_flow=None):
     if should_stop(stop_file):
         return
     roles_file = state_dir / "roles.tsv"
@@ -213,6 +274,11 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None):
             "is_running": lambda role: scheduler.is_running(state, role),
             "on_sent": lambda sender, task: scheduler.on_sent(state, sender, task),
         }
+    if plan_flow is not None:
+        delivery_hooks["after_deliver"] = (
+            lambda sender, headers, recipients, body:
+            plan_flow.on_delivered(roles, sender, headers, recipients, body)
+        )
     for role, role_info in roles.items():
         if should_stop(stop_file):
             break
@@ -234,12 +300,22 @@ def poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler=None):
                         str(path),
                         str(nested),
                     )
+    if plan_flow is not None and not should_stop(stop_file):
+        # Only queues a poll for the flow's worker (rate-limited, with backoff):
+        # merge detection, worktree sync and next-feature dispatch happen there.
+        # Failures are logged and never stop the daemon loop.
+        try:
+            plan_flow.poll_merges(roles)
+            ERRORS.clear("plan-poll-error")
+        except Exception as e:
+            log_error(log_file, daemon_dir, "plan-poll-error", e)
     if scheduler is None or should_stop(stop_file):
         return
     try:
         scheduler.tick(state)
+        ERRORS.clear("scheduler-error")
     except Exception as e:
-        log(log_file, daemon_dir, "scheduler-error", repr(e))
+        log_error(log_file, daemon_dir, "scheduler-error", e)
     agent_state.save(state_dir, state)
 
 
@@ -264,11 +340,23 @@ def main():
 
     log(log_file, daemon_dir, "started")
     scheduler = build_scheduler(project_root, log_file, daemon_dir)
+    # Plan delivery runs on the flow's own worker thread with short git/gh
+    # timeouts, so it can never stall handoff delivery or the scheduler tick.
+    flow = PlanFlow(project_root, log=lambda *parts: log(log_file, daemon_dir, *parts),
+                    synchronous=False, **DAEMON_TIMEOUTS)
     try:
         while not should_stop(stop_file):
-            poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler)
+            try:
+                poll_once(state_dir, daemon_dir, stop_file, log_file, scheduler, flow)
+                ERRORS.clear("poll-error")
+            except Exception as e:  # the loop must outlive any single bad poll
+                try:
+                    log_error(log_file, daemon_dir, "poll-error", e)
+                except Exception:
+                    pass
             sleep_poll(POLL_MS, stop_file)
     finally:
+        flow.close()
         pid_file.unlink(missing_ok=True)
         log(log_file, daemon_dir, "stopped")
 

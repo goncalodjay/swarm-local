@@ -24,11 +24,11 @@ interface HerdrListResponse {
 
 const DEFAULT_TIMEOUT_MS = 800;
 
-async function queryHerdrAgentsInternal(timeoutMs: number): Promise<HerdrAgent[]> {
+async function queryHerdrAgentsInternal(session: string, timeoutMs: number): Promise<HerdrAgent[]> {
   return new Promise((resolve) => {
     let proc: ReturnType<typeof spawn>;
     try {
-      proc = spawn("herdr", ["agent", "list"], { stdio: ["ignore", "pipe", "pipe"] });
+      proc = spawn("herdr", ["--session", session, "agent", "list"], { stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       log.warn({ event: "herdr_spawn_failed", err: errMessage(err) }, "cannot spawn herdr");
       resolve([]);
@@ -76,17 +76,17 @@ async function queryHerdrAgentsInternal(timeoutMs: number): Promise<HerdrAgent[]
   });
 }
 
-export async function queryHerdrAgents(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<HerdrAgent[]> {
+export async function queryHerdrAgents(session: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<HerdrAgent[]> {
   if (!isTracingConfigured()) {
-    return queryHerdrAgentsInternal(timeoutMs);
+    return queryHerdrAgentsInternal(session, timeoutMs);
   }
   const span = startObservation(
     "herdr.query_agents",
-    { input: { timeout_ms: timeoutMs } },
+    { input: { herdr_session: session, timeout_ms: timeoutMs } },
     { asType: "tool" },
   );
   try {
-    const agents = await queryHerdrAgentsInternal(timeoutMs);
+    const agents = await queryHerdrAgentsInternal(session, timeoutMs);
     span.update({ output: { count: agents.length, statuses: agents.map(a => a.agent_status) } });
     return agents;
   } catch (err) {

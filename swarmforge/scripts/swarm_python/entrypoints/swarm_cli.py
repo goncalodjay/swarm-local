@@ -12,7 +12,15 @@ from dataclasses import replace
 from swarm_python import agent_state
 from swarm_python.ansi import BOLD, CYAN, GREEN, RED, RESET, YELLOW
 from swarm_python.config import AGENT_WINDOW, RoleRow, parse_config
-from swarm_python.deps import check_backends, command_exists, require
+from swarm_python.deps import (
+    check_backends,
+    check_toolchain,
+    command_exists,
+    require,
+    toolchain_report,
+    toolchain_summary,
+)
+from swarm_python.env import utf8_environ
 from swarm_python.git_ops import (
     init_repo_if_missing,
     prepare_handoff_dirs,
@@ -113,6 +121,27 @@ def prepare_workspace(ctx, roles):
     write_roles_tsv(ctx, roles)
 
 
+def report_toolchain(ctx):
+    """Execute-check the bundled Gherkin tools, warn about unusable ones and leave
+    the result in `.swarmforge/toolchain-check.txt` for the specifier to read.
+    Never fatal: projects without Gherkin do not need the tools."""
+    statuses = check_toolchain(ctx.state_dir / "toolchain" / "bin")
+    problems = toolchain_report(statuses)
+    check_file = ctx.state_dir / "toolchain-check.txt"
+    try:
+        if problems:
+            head = "Gherkin toolchain: UNUSABLE tools (do not generate .feature files)"
+        else:
+            head = "Gherkin toolchain: ok"
+        check_file.write_text(head + "\n" + toolchain_summary(statuses) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    if problems:
+        print(f"{YELLOW}Warning: the Gherkin toolchain is not usable on this machine:{RESET}")
+        for line in problems.splitlines():
+            print(f"{YELLOW}  - {line}{RESET}")
+
+
 def stop_handoff_daemon(ctx):
     subprocess.run(
         [sys.executable, str(STOP_DAEMON), str(ctx.working_dir)],
@@ -126,7 +155,9 @@ def start_handoff_daemon(ctx):
     command = list(inhibit_prefix) + [sys.executable, str(HANDOFFD), str(ctx.working_dir)]
     log = open(ctx.handoff_daemon_log, "ab")
     try:
-        subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        subprocess.Popen(
+            command, stdout=log, stderr=subprocess.STDOUT, env=utf8_environ(),
+        )
     finally:
         log.close()
     extra = " with OS sleep prevention" if inhibit_prefix else ""
@@ -181,6 +212,7 @@ def run_main(root: str, open_tui: bool = True):
     ctx = replace(ctx, roles=roles)
 
     prepare_workspace(ctx, roles)
+    report_toolchain(ctx)
     prepare_worktrees(ctx.working_dir, roles)
     prepare_handoff_dirs(roles)
     sync_worktree_scripts(
@@ -270,6 +302,11 @@ def run_tui(root: str):
     print(f"{GREEN}Starting SwarmForge TUI in {RESET}{root}")
     os.chdir(str(root))
     # The TUI is a self-contained binary; it needs no interpreter on PATH.
+    if os.name == "nt":
+        # os.execv does not replace the process on Windows: this interpreter
+        # exits at once, the calling shell gets its prompt back, and the shell
+        # then competes with the TUI for console input. Wait for the TUI.
+        sys.exit(subprocess.run([str(tui_bundle)]).returncode)
     os.execv(str(tui_bundle), [str(tui_bundle)])
 
 
@@ -317,6 +354,9 @@ def main():
     cmd = args[0]
     if cmd == "tui":
         run_tui(args[1] if len(args) > 1 else cwd)
+    elif cmd == "plan":
+        from swarm_python import plan_cli
+        sys.exit(plan_cli.main(args[1:]))
     elif cmd == "stop":
         stop_swarm(args[1] if len(args) > 1 else cwd)
     elif cmd == "--no-tui":

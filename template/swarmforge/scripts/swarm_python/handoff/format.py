@@ -4,7 +4,7 @@ RESERVED_FIELDS = frozenset({
     "id", "from", "role", "recipient",
     "created_at", "enqueued_at", "dequeued_at", "completed_at",
 })
-ALLOWED_FIELDS = frozenset({"type", "to", "priority", "task", "commit", "message"})
+ALLOWED_FIELDS = frozenset({"type", "to", "priority", "task", "commit", "message", "verdict"})
 ALLOWED_TYPES = frozenset({"git_handoff", "note"})
 
 
@@ -12,11 +12,11 @@ def header_field(path: Path, field: str):
     prefix = f"{field}: "
     with path.open("r", encoding="utf-8") as f:
         for line in f:
-            line = line.rstrip("\n")
+            line = line.strip()  # also drops the \r of CRLF drafts
             if not line:
                 return None
             if line.startswith(prefix):
-                return line[len(prefix):]
+                return line[len(prefix):].strip()
     return None
 
 

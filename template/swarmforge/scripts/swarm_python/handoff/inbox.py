@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+from ..plan import coder_context
 from .format import header_field, header_value, body
 from .timefmt import now_id_ts
 
@@ -34,7 +35,7 @@ def new_batch_dir(in_process_dir: Path) -> Path:
         suffix += 1
 
 
-def print_task(file: Path) -> None:
+def print_task(file: Path, context=None) -> None:
     task_name = header_field(file, "task")
     print(f"TASK: {file}")
     print(f"FROM: {header_value(file, 'from', 'unknown')}")
@@ -42,6 +43,11 @@ def print_task(file: Path) -> None:
     print(f"PRIORITY: {header_value(file, 'priority', '50')}")
     if task_name:
         print(f"TASK_NAME: {task_name}")
+    if context is None:
+        context = coder_context(task_name)
+    if context:
+        print("PLAN_CONTEXT:")
+        sys.stdout.write(context)
     print("PAYLOAD:")
     sys.stdout.write(body(file))
 

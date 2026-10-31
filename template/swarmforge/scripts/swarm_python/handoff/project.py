@@ -6,7 +6,7 @@ from pathlib import Path
 def _git_root_or_common() -> Path | None:
     r = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if r.returncode == 0:
         root = Path(r.stdout.strip())
@@ -14,7 +14,7 @@ def _git_root_or_common() -> Path | None:
             return root
     r = subprocess.run(
         ["git", "rev-parse", "--git-common-dir"],
-        capture_output=True, text=True
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if r.returncode == 0:
         common = Path(r.stdout.strip())
