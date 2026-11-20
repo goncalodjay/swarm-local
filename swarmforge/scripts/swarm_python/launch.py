@@ -8,6 +8,18 @@ from .env import UTF8_ENV, shell_quote
 from .sessions import RESUME_PROMPT, SessionPlan
 
 
+PROMPT_POINTER = (
+    "Your full operating instructions are in the file {path}. "
+    "Read that whole file now and follow it exactly before doing anything else."
+)
+
+
+def is_cmd_shim(path: str) -> bool:
+    """True for Windows batch shims, which cmd.exe executes with its 8191-char
+    command-line limit (unlike native executables)."""
+    return Path(path).suffix.lower() in (".cmd", ".bat")
+
+
 def _extra_args_prefix(row: RoleRow) -> str:
     return f"{row.extra_args} " if row.extra_args else ""
 
@@ -102,7 +114,17 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
 
     # Resolve the agent binary at launch time so the herdr pane does not
     # depend on the shell's PATH inheriting the caller's env.
-    agent_bin = shell_quote(shutil.which(agent) or agent)
+    resolved_bin = shutil.which(agent) or agent
+    agent_bin = shell_quote(resolved_bin)
+
+    # How the role prompt reaches the agent as a command-line argument. A
+    # .cmd/.bat shim (npm installs on Windows) runs through cmd.exe, which
+    # rejects command lines over 8191 chars; the prompt is far larger, so such
+    # agents get a short instruction pointing at the prompt file instead.
+    if is_cmd_shim(resolved_bin):
+        inline_prompt = shell_quote(PROMPT_POINTER.format(path=prompt_file))
+    else:
+        inline_prompt = f'"$(<{shell_quote(str(prompt_file))})"'
 
     resuming = session is not None and session.resume
     if agent == "kiro-cli" and not (session is not None and session.session_id):
@@ -136,7 +158,7 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
 
     first_message = (
         shell_quote(RESUME_PROMPT) if resuming
-        else f'"$(<{shell_quote(str(prompt_file))})"'
+        else inline_prompt
     )
 
     if agent == "claude":
@@ -157,27 +179,27 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
         agent_cmd = (
             f"{agent_bin} exec -C {shell_quote(str(role_worktree))} "
             f"{_extra_args_prefix(row)}"
-            f'"$(<{shell_quote(str(prompt_file))})"'
+            f'{inline_prompt}'
         )
     elif agent == "copilot":
         agent_cmd = (
             f"{agent_bin} -C {shell_quote(str(role_worktree))} "
             f"--name {shell_quote(f'SwarmForge {display}')} "
             f"{_extra_args_prefix(row)}"
-            f'-i "$(<{shell_quote(str(prompt_file))})"'
+            f'-i {inline_prompt}'
         )
     elif agent == "grok":
         agent_cmd = (
             f"{agent_bin} --cwd {shell_quote(str(role_worktree))} "
             f"{_grok_permission_prefix(row)}"
             f"{_extra_args_prefix(row)}"
-            f'--rules "$(<{shell_quote(str(prompt_file))})" '
-            f'--verbatim "$(<{shell_quote(str(prompt_file))})"'
+            f'--rules {inline_prompt} '
+            f'--verbatim {inline_prompt}'
         )
     elif agent == "opencode":
         agent_cmd = (
             f"{agent_bin} {_extra_args_prefix(row)}"
-            f'--prompt "$(<{shell_quote(str(prompt_file))})"'
+            f'--prompt {inline_prompt}'
         )
     elif agent == "hermes":
         # Hermes freezes a session's route (model, provider, reasoning) when the
@@ -213,7 +235,7 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
         else:
             agent_cmd = (
                 f"{agent_bin} chat {_extra_args_prefix(row)}"
-                f'"$(<{shell_quote(str(prompt_file))})"'
+                f'{inline_prompt}'
             )
     elif agent == "pi":
         session_args = (

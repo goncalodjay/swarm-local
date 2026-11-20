@@ -894,9 +894,27 @@ class LaunchCommandTest(unittest.TestCase):
 
     def test_prompt_is_read_with_bash_builtin_not_cat(self):
         for agent in ["claude", "codex", "copilot", "grok", "opencode", "kiro-cli"]:
-            cmd = self.command(agent, SessionPlan("u-1", resume=False))
+            with mock.patch("swarm_python.launch.shutil.which", return_value=f"/usr/bin/{agent}"):
+                cmd = self.command(agent, SessionPlan("u-1", resume=False))
             self.assertNotIn("$(cat", cmd, agent)
             self.assertIn('"$(<', cmd, agent)
+
+    def test_cmd_shim_agents_get_a_short_pointer_instead_of_the_inline_prompt(self):
+        # A .cmd/.bat shim runs through cmd.exe, which rejects command lines over
+        # 8191 chars ("The command line is too long"); role prompts are far larger.
+        prompt_file = str(self.ctx.prompts_dir / "coder.md")
+        for shim in ("C:\\nvm4w\\nodejs\\opencode.CMD", "C:\\tools\\opencode.bat"):
+            with mock.patch("swarm_python.launch.shutil.which", return_value=shim):
+                cmd = self.command("opencode", SessionPlan("u-1", resume=False))
+            self.assertNotIn('"$(<', cmd, shim)
+            self.assertIn(prompt_file, cmd.split("--prompt", 1)[1], shim)
+            self.assertIn("if [ ! -s ", cmd, shim)
+
+    def test_cmd_shim_detection_ignores_native_executables(self):
+        for native in ("C:\\bin\\codex.EXE", "/usr/local/bin/opencode"):
+            with mock.patch("swarm_python.launch.shutil.which", return_value=native):
+                cmd = self.command("opencode", SessionPlan("u-1", resume=False))
+            self.assertIn('--prompt "$(<', cmd, native)
 
     def test_fresh_launch_fails_loudly_on_empty_prompt(self):
         fresh = self.command("codex", SessionPlan("u-1", resume=False))
