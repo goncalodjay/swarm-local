@@ -5,10 +5,13 @@ Run from the repo root:  python3 -m unittest discover -s tests/swarm_python
 """
 
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -21,7 +24,7 @@ from swarm_python.env import shell_quote  # noqa: E402
 from swarm_python.entrypoints import handoffd  # noqa: E402
 from swarm_python.launch import build_launch_command  # noqa: E402
 from swarm_python.paths import build_context  # noqa: E402
-from swarm_python.sessions import RESUME_PROMPT, SessionPlan, plan_session  # noqa: E402
+from swarm_python.sessions import RESUME_PROMPT, SessionPlan, find_kiro_session, plan_session  # noqa: E402
 
 ROLES = ["specifier", "coder", "reviewer", "architect"]
 
@@ -57,6 +60,8 @@ class FakeHerdr:
         self.stopped.append(pane_id)
         if self.stop_works:
             self.agent_up[pane_id] = False
+            return "stopped"
+        return "failed"  # the agent survived the stop, like a busy agent on Windows
 
     def wake(self, pane_id, message=None):
         self.woken.append(pane_id)
@@ -552,7 +557,7 @@ class SchedulerTest(unittest.TestCase):
         self.clock.now += 2
         self.s.tick(self.state)
         self.assertEqual(self.herdr.messages, [sched.STALE_MESSAGE])
-        self.assertIn("done_with_current.sh", sched.STALE_MESSAGE)
+        self.assertIn("done_with_current", sched.STALE_MESSAGE)
         self.clock.now += sched.NUDGE_AFTER_S - 1
         self.s.tick(self.state)
         self.assertEqual(len(self.herdr.messages), 1)
@@ -643,15 +648,146 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(self.state["specifier"]["status"], "running")
         self.assertEqual(len(self.launches), 1)
 
+    def kiro_scheduler(self, lookup):
+        for row in self.rows:
+            row.agent = "kiro-cli"
+        self.s = sched.Scheduler(self.rows, self.herdr, self._launch, lambda *parts: self.logs.append(parts),
+                                 self.clock, sleep=lambda seconds: None, kiro_lookup=lookup)
+
+    def test_kiro_session_is_recorded_after_a_fresh_launch_and_resumed_for_the_same_task(self):
+        calls = []
+
+        def lookup(cwd, since):
+            calls.append((cwd, since))
+            return "sess_real", ""
+
+        self.kiro_scheduler(lookup)
+        write_handoff(self.row("coder").worktree_path, "new", "a.handoff", task="login")
+        self.state["specifier"]["status"] = "parked"
+        self.s.tick(self.state)
+        coder = self.state["coder"]
+        self.assertEqual(coder["session_id"], "")
+        self.assertFalse(self.launches[-1][1].resume)
+        self.clock.now += sched.KIRO_LOOKUP_EVERY_S + 1
+        self.s.tick(self.state)
+        self.assertEqual(coder["session_id"], "sess_real")
+        self.assertEqual(calls[0][0], self.row("coder").worktree_path)
+        coder["status"] = "parked"
+        self.s.tick(self.state)
+        self.assertEqual(self.launches[-1][1], SessionPlan("sess_real", resume=True))
+
+    def test_kiro_new_task_starts_fresh_and_never_reuses_the_old_id(self):
+        self.kiro_scheduler(lambda cwd, since: (None, "unused"))
+        self.state["coder"].update(task="login", session_id="sess_old")
+        write_handoff(self.row("coder").worktree_path, "new", "a.handoff", task="billing")
+        self.state["specifier"]["status"] = "parked"
+        self.s.tick(self.state)
+        self.assertEqual(self.launches[-1][1], SessionPlan("", resume=False))
+        self.assertEqual(self.state["coder"]["session_id"], "")
+
+    def test_kiro_without_a_stored_id_falls_back_to_fresh_and_says_so(self):
+        self.kiro_scheduler(lambda cwd, since: (None, "unused"))
+        self.state["coder"].update(task="login", session_id="")
+        write_handoff(self.row("coder").worktree_path, "new", "a.handoff", task="login")
+        self.state["specifier"]["status"] = "parked"
+        self.s.tick(self.state)
+        self.assertEqual(self.launches[-1][1], SessionPlan("", resume=False))
+        self.assertTrue(any(l[0] == "kiro-resume-fallback" for l in self.logs))
+
+    def test_kiro_failed_lookup_is_logged_with_its_reason_and_bounded(self):
+        calls = []
+
+        def lookup(cwd, since):
+            calls.append(1)
+            return None, "lookup failed: OSError: boom"
+
+        self.kiro_scheduler(lookup)
+        write_handoff(self.row("coder").worktree_path, "new", "a.handoff", task="login")
+        self.state["specifier"]["status"] = "parked"
+        self.s.tick(self.state)
+        for _ in range(sched.KIRO_LOOKUP_MAX + 4):
+            self.clock.now += sched.KIRO_LOOKUP_EVERY_S + 1
+            self.s.tick(self.state)
+        self.assertEqual(self.state["coder"]["session_id"], "")
+        self.assertEqual(len(calls), sched.KIRO_LOOKUP_MAX)
+        self.assertTrue(any(l[0] == "kiro-session-lookup" and "lookup failed" in l[-1] for l in self.logs))
+        self.assertTrue(any(l[0] == "kiro-session-unrecorded" for l in self.logs))
+
 
 class WindowsStopTest(unittest.TestCase):
-    def test_stop_sends_ctrl_c_twice_with_a_pause_between(self):
-        events = []
+    def panes(self, events, foreground):
         panes = sched.HerdrPanes("sess", sleep=lambda seconds: events.append(("sleep", seconds)))
-        with mock.patch("swarm_python.herdr_ops.pane_foreground", return_value=(200, 100)),                 mock.patch("swarm_python.herdr_ops.pane_send_keys",
-                           side_effect=lambda session, pane, *keys: events.append(("keys", keys))),                 mock.patch.object(sched, "os", types.SimpleNamespace()):   # no os.killpg: Windows path
-            panes.stop("w1:p1")
-        self.assertEqual(events, [("keys", ("C-c",)), ("sleep", 1), ("keys", ("C-c",))])
+        patches = [
+            mock.patch("swarm_python.herdr_ops.pane_foreground", side_effect=foreground),
+            mock.patch("swarm_python.herdr_ops.pane_send_keys",
+                       side_effect=lambda session, pane, *keys: events.append(("keys", keys))),
+            mock.patch("swarm_python.herdr_ops.pane_run",
+                       side_effect=lambda session, pane, *cmd: events.append(("run", cmd))),
+            mock.patch.object(sched, "os", types.SimpleNamespace()),  # no os.killpg: Windows path
+            mock.patch.object(sched.subprocess, "run",
+                              side_effect=lambda *a, **k: events.append(("taskkill", a[0]))),
+        ]
+        return panes, patches
+
+    def test_stop_interrupts_then_asks_the_agent_to_quit_then_kills_the_tree(self):
+        events = []
+        # The agent survives both interrupts and the /exit command.
+        panes, patches = self.panes(events, lambda *a: (200, 100))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual(panes.stop("w1:p1"), "failed")
+        self.assertEqual(events, [
+            ("keys", ("C-c",)), ("sleep", 1), ("keys", ("C-c",)), ("sleep", 1),
+            ("run", ("/exit",)), ("sleep", 2),
+            ("taskkill", ["taskkill", "/PID", "200", "/T", "/F"]),
+        ])
+
+    def test_stop_is_done_when_the_agent_exits_after_the_interrupt(self):
+        events = []
+        answers = [(200, 100), (100, 100)]
+        panes, patches = self.panes(events, lambda *a: answers.pop(0) if answers else (100, 100))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual(panes.stop("w1:p1"), "stopped")
+        self.assertEqual(events, [("keys", ("C-c",)), ("sleep", 1), ("keys", ("C-c",)), ("sleep", 1)])
+
+    def test_stop_reports_an_empty_pane(self):
+        events = []
+        panes, patches = self.panes(events, lambda *a: (100, 100))
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual(panes.stop("w1:p1"), "already-stopped")
+        self.assertEqual(events, [])
+
+    def test_park_failed_is_logged_when_the_agent_does_not_exit(self):
+        herdr = FakeHerdr()
+        herdr.stop_works = False  # the agent ignores the stop
+        clock = Clock()
+        rows = [
+            RoleRow(role="specifier", agent="claude", session="swarmforge-specifier",
+                    display_name="Specifier", worktree_name="master", worktree_path=Path("."),
+                    receive_mode="task", extra_args=None, workspace_id="w1", pane_id="w1:p1"),
+            RoleRow(role="coder", agent="claude", session="swarmforge-coder", display_name="Coder",
+                    worktree_name="coder", worktree_path=Path("."), receive_mode="task",
+                    extra_args=None, workspace_id="w2", pane_id="w2:p1"),
+        ]
+        logs = []
+        s = sched.Scheduler(rows, herdr, lambda *a: None, lambda *parts: logs.append(parts),
+                            clock, sleep=lambda seconds: None)
+        state = agent_state.initial_state(["specifier", "coder"])
+        state["coder"]["status"] = "running"
+        state["coder"]["launched_at"] = clock.now
+        herdr.agent_up["w2:p1"] = True
+        herdr.status["w2:p1"] = "idle"
+        clock.now += sched.PARK_GRACE_S + 1
+        s.tick(state)   # the idle period starts here
+        clock.now += sched.PARK_GRACE_S + 1
+        s.tick(state)   # now the role is parked
+        self.assertTrue(any("park-failed" in parts for parts in logs), logs)
+        self.assertEqual(state["coder"]["status"], "running")
 
 
 class StateFileTest(unittest.TestCase):
@@ -773,6 +909,93 @@ class LaunchCommandTest(unittest.TestCase):
         cmd = self.command("claude", None)
         self.assertNotIn("--session-id", cmd)
         self.assertNotIn("--resume", cmd)
+
+    def kiro_command(self, plan):
+        row = RoleRow(role="coder", agent="kiro-cli", session="swarmforge-coder", display_name="Coder",
+                      worktree_name="master", worktree_path=self.root, receive_mode="task",
+                      extra_args="--model claude-sonnet-5.5 --trust-all-tools",
+                      workspace_id="w2", pane_id="w2:p1")
+        return build_launch_command(self.ctx, 1, row, plan)
+
+    def test_kiro_fresh_launch_is_unchanged(self):
+        cmd = self.kiro_command(SessionPlan("", resume=False))
+        self.assertIn(" chat --model claude-sonnet-5.5 --trust-all-tools ", cmd)
+        self.assertIn('"$(<', cmd)
+        self.assertNotIn("--resume-id", cmd)
+
+    def test_kiro_resume_continues_the_stored_session_and_keeps_trust_and_model(self):
+        cmd = self.kiro_command(SessionPlan("sess_abc", resume=True))
+        self.assertIn("--resume-id sess_abc ", cmd)
+        self.assertIn("--trust-all-tools", cmd)
+        self.assertIn("--model claude-sonnet-5.5", cmd)
+        self.assertIn(RESUME_PROMPT, cmd)
+        self.assertNotIn('"$(<', cmd)
+        self.assertNotIn("if [ ! -s ", cmd)
+
+    def test_kiro_resume_without_a_stored_id_starts_fresh(self):
+        cmd = self.kiro_command(SessionPlan("", resume=True))
+        self.assertNotIn("--resume-id", cmd)
+        self.assertNotIn(RESUME_PROMPT, cmd)
+        self.assertIn('"$(<', cmd)
+        self.assertIn("--trust-all-tools", cmd)
+
+    def test_kiro_plan_resumes_only_a_stored_id_of_the_same_task(self):
+        self.assertEqual(plan_session("kiro-cli", "coder", "login", {}), SessionPlan("", resume=False))
+        stored = {"session_id": "sess_1", "task": "login"}
+        self.assertEqual(plan_session("kiro-cli", "coder", "login", stored), SessionPlan("sess_1", resume=True))
+        self.assertEqual(plan_session("kiro-cli", "coder", "billing", stored), SessionPlan("", resume=False))
+
+    def test_find_kiro_session_compares_parsed_times_and_ignores_older_sessions(self):
+        launch = datetime(2026, 11, 19, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        out = json.dumps([{"cwd": "x", "sessions": [
+            {"sessionId": "older", "updatedAt": "2026-11-19T11:00:00.000Z"},
+            {"sessionId": "mine", "updatedAt": "2026-11-19T12:00:05.500Z"},
+            {"sessionId": "later", "updatedAt": "2026-11-19T12:09:00+00:00"},
+            {"sessionId": "junk", "updatedAt": "not a date"},
+        ], "complete": True}])
+        with mock.patch("swarm_python.sessions.subprocess.run", return_value=types.SimpleNamespace(stdout=out)):
+            self.assertEqual(find_kiro_session(self.root, launch, "kiro-cli"), ("later", ""))
+        only_old = json.dumps([{"sessions": [{"sessionId": "older", "updatedAt": "2026-11-19T11:00:00Z"}]}])
+        with mock.patch("swarm_python.sessions.subprocess.run", return_value=types.SimpleNamespace(stdout=only_old)):
+            sid, reason = find_kiro_session(self.root, launch, "kiro-cli")
+        self.assertIsNone(sid)
+        self.assertIn("no session", reason)
+
+    def test_find_kiro_session_reports_a_failed_lookup(self):
+        with mock.patch("swarm_python.sessions.subprocess.run", side_effect=OSError("boom")):
+            sid, reason = find_kiro_session(self.root, 0, "kiro-cli")
+        self.assertIsNone(sid)
+        self.assertIn("lookup failed", reason)
+
+    def test_every_launch_records_the_agent_exit_code(self):
+        for index in (0, 1):
+            cmd = self.claude_cmd(index)
+            self.assertIn("exit_code=$?", cmd)
+            self.assertIn("coder-agent.log", cmd)
+            self.assertIn("agent-exit role=coder exit_code=", cmd)
+            self.assertEqual(cmd.count("exit_code=$?"), 1)
+            self.assertTrue(cmd.endswith("; exit $exit_code"))
+
+    def claude_cmd(self, index):
+        row = RoleRow(role="coder", agent="claude", session="swarmforge-coder", display_name="Coder",
+                      worktree_name="master", worktree_path=self.root, receive_mode="task",
+                      extra_args=None, workspace_id="w2", pane_id="w2:p1")
+        return build_launch_command(self.ctx, index, row, None)
+
+    def test_the_script_exits_with_the_agent_status_for_every_role(self):
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash not available")
+        for index in (0, 1):
+            tail = self.claude_cmd(index)
+            tail = tail[tail.index("; exit_code=$?"):]
+            # Never run the real cleanup script from a unit test.
+            tail = tail.replace(shell_quote(str(SCRIPTS / "swarm-cleanup.sh")), "true")
+            result = subprocess.run([bash, "-c", f"(exit 7){tail}"], capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=30)
+            self.assertEqual(result.returncode, 7, (index, result.stderr))
+            log = (self.root / ".swarmforge" / "logs" / "coder-agent.log").read_text(encoding="utf-8")
+            self.assertIn("exit_code=7", log)
 
 
 class DeliveryTest(unittest.TestCase):

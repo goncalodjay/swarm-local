@@ -12,6 +12,24 @@ def _extra_args_prefix(row: RoleRow) -> str:
     return f"{row.extra_args} " if row.extra_args else ""
 
 
+HELPER_NAMES = ("ready_for_next", "done_with_current", "swarm_handoff")
+
+
+def write_posix_helper_wrappers(bin_dir: Path, script_dir: Path) -> None:
+    """Bare-name entry points (`ready_for_next`) for POSIX shells. Windows gets
+    them as `.cmd` shims next to the scripts; elsewhere they are generated here
+    (executable, untracked) so the prompts can use one name on every OS."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for name in HELPER_NAMES:
+        wrapper = bin_dir / name
+        wrapper.write_text(
+            "#!/usr/bin/env bash\nexec "
+            f'{shell_quote(str(script_dir / (name + ".sh")))} "$@"\n',
+            encoding="utf-8", newline="\n",
+        )
+        wrapper.chmod(0o755)
+
+
 def _grok_wants_auto_approve(row: RoleRow) -> bool:
     args = row.extra_args
     if not args:
@@ -82,18 +100,32 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
 
     _write_agent_instruction(role, role_worktree, prompt_file)
 
+    # Resolve the agent binary at launch time so the herdr pane does not
+    # depend on the shell's PATH inheriting the caller's env.
+    agent_bin = shell_quote(shutil.which(agent) or agent)
+
+    resuming = session is not None and session.resume
+    if agent == "kiro-cli" and not (session is not None and session.session_id):
+        resuming = False  # nothing recorded to continue: start fresh with the full prompt
+
+    helper_bin = ""
+    if os.name != "nt":
+        bin_dir = ctx.state_dir / "bin" / role
+        write_posix_helper_wrappers(bin_dir, role_script_dir)
+        helper_bin = f"{shell_quote(str(bin_dir))}:"
+
     base = (
         f"export SWARMFORGE_ROLE={shell_quote(role)} && "
         f"export ENGRAM_PROJECT={shell_quote(ctx.working_dir.name)} && "
         + "".join(f"export {k}={shell_quote(v)} && " for k, v in UTF8_ENV.items())
-        + f"export PATH={shell_quote(str(role_script_dir))}:"
+        + f"export PATH={helper_bin}{shell_quote(str(role_script_dir))}:"
         f"{shell_quote(str(role_tool_bin))}:$PATH:"
         # The project root holds the `swarm` entry point (plan, stop...). It goes
         # LAST so nothing in the project can shadow a system command.
         f"{shell_quote(str(ctx.working_dir))} && "
         f"cd {shell_quote(str(role_worktree))} && "
     )
-    if not (session is not None and session.resume):
+    if not resuming:
         # Fail loudly rather than start the agent with an empty prompt. Uses
         # only shell builtins so it works when the pane's PATH lacks coreutils.
         pf = shell_quote(str(prompt_file))
@@ -102,11 +134,6 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
             f"echo \"swarmforge: prompt file missing or empty: \"{pf} >&2; exit 1; fi && "
         )
 
-    # Resolve the agent binary at launch time so the herdr pane does not
-    # depend on the shell's PATH inheriting the caller's env.
-    agent_bin = shell_quote(shutil.which(agent) or agent)
-
-    resuming = session is not None and session.resume
     first_message = (
         shell_quote(RESUME_PROMPT) if resuming
         else f'"$(<{shell_quote(str(prompt_file))})"'
@@ -175,12 +202,19 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
     elif agent == "kiro-cli":
         # `kiro-cli chat [INPUT]` starts an interactive session with INPUT as
         # the first message. --model comes from the swarmforge.conf extra args
-        # (verified in `kiro-cli chat --help`). Resume is not wired up: the
-        # swarm relaunches kiro-cli fresh each time.
-        agent_cmd = (
-            f"{agent_bin} chat {_extra_args_prefix(row)}"
-            f'"$(<{shell_quote(str(prompt_file))})"'
-        )
+        # (verified in `kiro-cli chat --help`). kiro keeps neither the model
+        # nor --trust-all-tools in a session, so a resume re-applies the
+        # configured extra args or it would ask permission for every command.
+        if resuming:
+            agent_cmd = (
+                f"{agent_bin} chat --resume-id {shell_quote(session.session_id)} "
+                f"{_extra_args_prefix(row)}{first_message}"
+            )
+        else:
+            agent_cmd = (
+                f"{agent_bin} chat {_extra_args_prefix(row)}"
+                f'"$(<{shell_quote(str(prompt_file))})"'
+            )
     elif agent == "pi":
         session_args = (
             f"--session-id {shell_quote(session.session_id)} "
@@ -196,18 +230,32 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
 
     command = base + agent_cmd
 
+    # Record how and when the agent ended: the daemon only sees "the pane is
+    # back at its shell", so without this a crash leaves no reason behind.
+    # Shell builtins only. exit_code keeps the agent's status, and the script
+    # always ends with it so the pane sees the agent's real exit status.
+    log_dir = ctx.state_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    agent_log = shell_quote(str(log_dir / f"{role}-agent.log"))
+    command += (
+        "; exit_code=$?; "
+        f"printf '%(%Y-%m-%dT%H:%M:%S%z)T agent-exit role={role} exit_code=%s\\n' -1 \"$exit_code\" "
+        f">> {agent_log} 2>/dev/null"
+    )
+
     if index == 0:
         cleanup_parts = [
-            "; exit_code=$?;",
+            ";",
             "nohup",
             shell_quote(str(ctx.script_dir / "swarm-cleanup.sh")),
             shell_quote(ctx.herdr_session),
             shell_quote(str(ctx.working_dir)),
         ]
         cleanup_parts.extend(shell_quote(r.workspace_id) for r in ctx.roles)
-        cleanup_parts.extend([">/dev/null", "2>&1", "&!", ";", "exit", "$exit_code"])
+        cleanup_parts.extend([">/dev/null", "2>&1", "&!"])
         command += " " + " ".join(cleanup_parts)
 
+    command += "; exit $exit_code"
     return command
 
 

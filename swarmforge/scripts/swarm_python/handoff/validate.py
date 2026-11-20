@@ -9,7 +9,7 @@ from .roles import role_known
 from .timefmt import now_iso
 
 USAGE_TEXT = """\
-Usage: swarm_handoff.sh <draft-file>
+Usage: swarm_handoff <draft-file>
 
 Draft formats:
 

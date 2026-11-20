@@ -249,7 +249,7 @@ def run_main(root: str, open_tui: bool = True):
         print(f"  {r.display_name}: {r.workspace_id} ({r.pane_id})")
     print(f"Agent states: {agent_state.state_path(ctx.state_dir)}")
     print()
-    print(f"{GREEN}Tip: Write a handoff draft and run swarm_handoff.sh while "
+    print(f"{GREEN}Tip: Write a handoff draft and run swarm_handoff while "
           f"the swarm is running.{RESET}")
     print(f"{GREEN}Tip: View or attach with 'herdr session attach "
           f"{ctx.herdr_session}' if needed.{RESET}")

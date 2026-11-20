@@ -393,7 +393,10 @@ class SyncAndDispatchTests(FlowCase):
         self.assertTrue(any("dispatched 'b'" in a for a in actions), actions)
         self.assertEqual(git(coder, "rev-parse", "HEAD"), self.final)
 
-    def test_role_with_pending_inbox_work_is_deferred(self):
+    def test_role_with_pending_inbox_work_does_not_block_the_next_feature(self):
+        # The coder builds the next feature, so only ITS worktree can stop the
+        # dispatch. A role that is busy (mail waiting) stays where it is, is
+        # reported by name and is retried on a later poll.
         self.merge()
         inbox = Path(self.roles["reviewer"]["worktree-path"]) / ".swarmforge" / "handoffs" / "inbox" / "new"
         inbox.mkdir(parents=True)
@@ -401,7 +404,16 @@ class SyncAndDispatchTests(FlowCase):
         before = git(self.roles["reviewer"]["worktree-path"], "rev-parse", "HEAD")
         self.flow.poll_merges(self.roles, force=True)
         self.assertEqual(git(self.roles["reviewer"]["worktree-path"], "rev-parse", "HEAD"), before)
-        self.assertEqual(self.feat("b")["status"], "pending")
+        self.assertEqual(git(self.roles["coder"]["worktree-path"], "rev-parse", "HEAD"), self.final)
+        self.assertEqual(self.feat("b")["status"], "coding")
+        log = (self.root / ".swarmforge" / "logs" / "plan-flow.log").read_text(encoding="utf-8")
+        self.assertIn("worktree-blocked", log)
+        self.assertIn("reviewer", log)
+        # The blocked role is retried later, once it is idle again.
+        (inbox / "x.handoff").unlink()
+        actions = self.flow.poll_merges(self.roles, force=True)
+        self.assertTrue(any("synced the reviewer worktree" in a for a in actions), actions)
+        self.assertEqual(git(self.roles["reviewer"]["worktree-path"], "rev-parse", "HEAD"), self.final)
 
     def test_dispatches_the_next_feature_through_the_gate(self):
         self.merge()
@@ -880,9 +892,10 @@ class ResetSafetyTests(SafetyCase):
         self.assertEqual(self.flow.poll_merges(self.roles, force=True), ["feature 'a' merged"])
         self.assertEqual(git(self.coder(), "rev-parse", "HEAD"), before)
         self.assertEqual(git(self.coder(), "rev-parse", "--abbrev-ref", "HEAD"), branch_before)
-        for name in ("reviewer", "architect"):  # all-or-nothing: no other worktree moved either
+        for name in ("reviewer", "architect"):
+            # Per role: a blocked worktree does not keep the other ones stale.
             self.assertEqual(git(self.roles[name]["worktree-path"], "rev-parse", "HEAD"),
-                             self.final if name == "architect" else self.base_head)
+                             self.final)
         self.assertEqual(self.feat("b")["status"], "pending")
         self.assertNotIn("synced_at", self.feat("a"))
 
@@ -1112,7 +1125,9 @@ class WorkerTests(SafetyCase):
 class MirrorTests(unittest.TestCase):
     def test_swarmforge_and_template_copies_are_identical(self):
         repo = SCRIPTS.parents[1]
-        rels = ["plan.py", "plan_cli.py", "plan_flow.py", "entrypoints/handoffd.py"]
+        rels = ["plan.py", "plan_cli.py", "plan_flow.py", "worktree_ops.py",
+                "entrypoints/handoffd.py", "entrypoints/swarm_handoff.py",
+                "scheduler.py", "git_ops.py"]
         for rel in rels:
             a = (repo / "swarmforge" / "scripts" / "swarm_python" / rel).read_bytes().replace(b"\r\n", b"\n")
             b = (SCRIPTS / "swarm_python" / rel).read_bytes().replace(b"\r\n", b"\n")

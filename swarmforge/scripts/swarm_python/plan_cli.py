@@ -19,6 +19,8 @@ Uso: swarm plan <comando>
   approve                       aprueba el plan (solo lo puede hacer una persona)
   publish <id>                  (re)publica una feature terminada: sube el commit y abre el PR
   sync                          detecta PRs mergeados, sincroniza y despacha la siguiente feature
+  rebase <id>                   devuelve una feature a 'pending' y pone el worktree del coder
+                                sobre la base (recuperacion de una feature trabada)
   set-status <id> <estado> [--force]
                                 cambia el estado de una feature (manual);
                                 --force permite saltos que el ciclo no permite
@@ -92,6 +94,8 @@ def cmd_status(plan_dir):
     _out(_decisions_line(plan, plan_dir))
     for f in plan.get("features", []):
         _out(f"  {f.get('status', '?'):<15} {f.get('id', '?')}")
+        if f.get("base_commit"):
+            _out(f"      commit base: {f['base_commit'][:10]}")
         if f.get("final_commit"):
             _out(f"      commit final: {f['final_commit'][:10]}")
         if f.get("pr_url"):
@@ -199,6 +203,22 @@ def cmd_sync(plan_dir, env, flow=None):
     return 0
 
 
+def cmd_rebase(plan_dir, feature_id, env, flow=None):
+    """Put a stuck feature back on the base and reopen it."""
+    if not _human_only(env, "reabrir una feature"):
+        return 3
+    if not planlib.exists(plan_dir):
+        _err(f"No hay plan en {planlib.plan_path(plan_dir)}.")
+        return 1
+    flow = _flow(plan_dir, flow)
+    ok, message = flow.rebase_feature(feature_id)
+    if not ok:
+        _err(f"No se pudo reabrir '{feature_id}': {message}")
+        return 1
+    _out(message)
+    return 0
+
+
 def main(argv, plan_dir=None, env=None, flow=None):
     env = os.environ if env is None else env
     if not argv or argv[0] in ("-h", "--help", "help"):
@@ -218,6 +238,8 @@ def main(argv, plan_dir=None, env=None, flow=None):
         return cmd_publish(plan_dir, rest[0], env, flow)
     if cmd == "sync" and not rest:
         return cmd_sync(plan_dir, env, flow)
+    if cmd == "rebase" and len(rest) == 1:
+        return cmd_rebase(plan_dir, rest[0], env, flow)
     if cmd == "set-status":
         force = "--force" in rest
         args = [a for a in rest if a != "--force"]

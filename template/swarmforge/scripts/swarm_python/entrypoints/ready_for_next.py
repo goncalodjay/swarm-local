@@ -43,7 +43,7 @@ def run_task_mode():
     if in_process_batches:
         fail(
             2,
-            "TASK_IN_PROCESS_IS_BATCH: use ready_for_next.sh or done_with_current.sh.",
+            "TASK_IN_PROCESS_IS_BATCH: use ready_for_next or done_with_current.",
             "\n".join(f"- {b}" for b in in_process_batches),
         )
 
@@ -84,7 +84,7 @@ def run_batch_mode():
     if in_process_files:
         fail(
             2,
-            "TASK_IN_PROCESS_IS_SINGLE: use ready_for_next.sh or done_with_current.sh.",
+            "TASK_IN_PROCESS_IS_SINGLE: use ready_for_next or done_with_current.",
             "\n".join(f"- {f}" for f in in_process_files),
         )
 

@@ -44,6 +44,7 @@ from collections import namedtuple
 from pathlib import Path
 
 from . import plan as planlib
+from . import worktree_ops
 from .env import env_long
 from .handoff.timefmt import now_id_ts, now_iso
 from .scheduler import pending_work
@@ -67,8 +68,9 @@ PR_FIELDS = "state,baseRefName,headRefName,headRefOid,mergeCommit"
 # Untracked paths the swarm itself puts in every role worktree (a copy of the
 # scripts and the runtime state). They must not make a worktree look dirty,
 # otherwise the post-merge sync would be deferred forever. Tracked changes
-# anywhere, including inside these paths, still block.
-SWARM_OWNED_UNTRACKED = ("swarmforge", ".swarmforge")
+# anywhere, including inside these paths, still block. The rules live in
+# worktree_ops so the sync and the handoff gate agree on them.
+SWARM_OWNED_UNTRACKED = worktree_ops.SWARM_OWNED_UNTRACKED
 GUARDED_STATE_PATHS = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD")
 
 _REDACTIONS = (
@@ -222,8 +224,7 @@ def extract_report(body):
 
 def swarm_owned_untracked(porcelain_path):
     """True for a `git status --porcelain` untracked path under SWARM_OWNED_UNTRACKED."""
-    path = porcelain_path.strip().strip('"').replace("\\", "/").rstrip("/")
-    return any(path == owned or path.startswith(owned + "/") for owned in SWARM_OWNED_UNTRACKED)
+    return worktree_ops.swarm_owned_untracked(porcelain_path)
 
 
 def _same_path(a, b):
@@ -232,20 +233,7 @@ def _same_path(a, b):
 
 def roles_from_tsv(path):
     """role -> {worktree-name, worktree-path} from roles.tsv (same file the daemon reads)."""
-    out = {}
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return out
-    for line in text.splitlines():
-        fields = line.split("\t")
-        if fields and fields[0]:
-            out[fields[0]] = {
-                "role": fields[0],
-                "worktree-name": fields[1] if len(fields) > 1 else "",
-                "worktree-path": fields[2] if len(fields) > 2 else "",
-            }
-    return out
+    return worktree_ops.roles_from_tsv(path)
 
 
 # --- the flow -----------------------------------------------------------------
@@ -270,6 +258,7 @@ class PlanFlow:
         self._deferrals = {}          # feature id -> consecutive sync deferrals
         self._defer_until = 0.0       # sync retry is skipped until this clock() value
         self._last_deferral = None
+        self._blocked_roles = {}      # role -> (worktree-name, path, reason) not synced yet
         self._noted = set()           # one-time note keys (per process)
         self._queue = None
         self._worker = None
@@ -614,6 +603,11 @@ class PlanFlow:
             awaiting = [f for f in feats if f.get("status") == "awaiting_merge" and not f.get("pr_closed_at")]
             unsynced = [f for f in feats if f.get("status") == "merged" and not f.get("synced_at")]
             if not awaiting and not unsynced:
+                # Nothing to merge, but a role that could not be moved in an
+                # earlier sync may be ready now: no role may stay on a stale
+                # base forever.
+                if self._blocked_roles and (force or self.clock() >= self._defer_until):
+                    actions += self._retry_blocked(roles)
                 return actions
             base, err = self._targets(plan)
             if err:
@@ -728,13 +722,78 @@ class PlanFlow:
                 unsynced = [f for f in planlib._features(plan)
                             if f.get("status") == "merged" and not f.get("synced_at")]
                 if not unsynced:
-                    return []
+                    # Nothing new to sync, but a role that could not be moved in
+                    # an earlier sync may be ready now: no role may stay on a
+                    # stale base forever.
+                    return self._retry_blocked_unlocked(roles)
                 for older in unsynced[:-1]:
                     planlib.update_feature(self.plan_dir, older["id"], synced_at=now_iso())
                 return self._sync_locked(unsynced[-1]["id"], roles, fetch_state)
         except planlib.PlanError as e:
             self._log("sync-error", str(e))
             return []
+
+    def _retry_blocked(self, roles):
+        """Move the worktrees a previous sync could not move. Takes the lock."""
+        if not self._blocked_roles:
+            return []
+        try:
+            with planlib.plan_lock(self.plan_dir, "plan-flow.lock", stale=FLOW_LOCK_STALE_S):
+                return self._retry_blocked_unlocked(roles)
+        except planlib.PlanError as e:
+            self._log("sync-error", str(e))
+            return []
+
+    def _retry_blocked_unlocked(self, roles):
+        """Move the worktrees a previous sync could not move. Returns the
+        actions (empty when nothing changed)."""
+        if not self._blocked_roles:
+            return []
+        plan = planlib.load(self.plan_dir)
+        base, err = self._targets(plan)
+        if err:
+            return []
+        head = self._resolve(f"origin/{base}" if self._has_origin() else base)
+        if not head:
+            return []
+        # The role that holds the feature in progress keeps its worktree: moving
+        # it would move the work that is being done. The other roles can catch
+        # up (the blocker check below already proves they are idle and clean).
+        busy = self._role_working_on(plan)
+        actions = []
+        still = {}
+        for role, (name, path, why) in self._blocked_roles.items():
+            if role == busy:
+                still[role] = (name, path, why)
+                continue
+            if not Path(path).is_dir():
+                continue
+            blocker = self._worktree_blocker(role, name, path, head, "")
+            if blocker:
+                still[role] = (name, path, blocker)
+                continue
+            moved = self._g("checkout", "-q", "-B", f"swarmforge-{name}", head, cwd=path)
+            if moved.rc != 0:
+                still[role] = (name, path, f"checkout failed ({moved.err})")
+                continue
+            self._log("worktree-synced", role, head[:10], "(retry)")
+            actions.append(f"synced the {role} worktree to {head[:10]}")
+        self._blocked_roles = still
+        return actions
+
+    @staticmethod
+    def _role_working_on(plan):
+        """The role that holds the feature in progress ('' when there is none)."""
+        for f in planlib._features(plan):
+            status = f.get("status")
+            if status in ("coding", "review", "arch", "awaiting_merge"):
+                return {
+                    "coding": "coder",
+                    "review": "reviewer",
+                    "arch": "architect",
+                    "awaiting_merge": "architect",
+                }[status]
+        return ""
 
     def sync_and_advance(self, feature_id, roles, fetch_state=None):
         """Bring the checkout and idle worktrees up to the merged base, then
@@ -790,27 +849,45 @@ class PlanFlow:
             return [self._advance_manual(feature_id, roles, warnings)]
 
         final = feature.get("final_commit") or ""
-        plans, deferred = [], []
+        safe, blocked = [], []
         for role, info in roles.items():
             name, path = info.get("worktree-name", ""), info.get("worktree-path", "")
             if not path or name in NO_WORKTREE or _same_path(path, self.root) or not Path(path).is_dir():
                 continue
             why = self._worktree_blocker(role, name, path, head, final)
             if why:
-                deferred.append(f"{role} ({path}): {why}")
+                blocked.append((role, name, path, why))
             else:
-                plans.append((role, name, path))
-        if deferred:
-            self._defer(roles, feature, "; ".join(deferred))
-            return []
+                safe.append((role, name, path))
+        # Per role, not all or nothing: one blocked worktree must not keep every
+        # other role on the pre-merge base. Each role that can be moved is moved
+        # on its own, and the blocked ones are reported by name.
         failed = []
-        for role, name, path in plans:  # every worktree was checked first: all-or-nothing intent
+        for role, name, path in safe:
             moved = self._g("checkout", "-q", "-B", f"swarmforge-{name}", head, cwd=path)
             if moved.rc != 0:
-                failed.append(f"{role} ({path}): checkout failed ({moved.err})")
+                why = f"checkout failed ({moved.err})"
+                failed.append(f"{role} ({path}): {why}")
+                blocked.append((role, name, path, why))
+            else:
+                self._log("worktree-synced", role, head[:10])
+        for role, name, path, why in blocked:
+            self._log("worktree-blocked", role, why)
+        self._blocked_roles = {role: (name, path, why) for role, name, path, why in blocked}
         if failed:
             self._defer(roles, feature, "; ".join(failed))
             return []
+        # The coder builds the next feature: without the merged base under it the
+        # work would stack on commits the base branch does not contain, and the
+        # PR would be refused at publish time. So the coder blocks the dispatch;
+        # the other roles do not (they are retried on a later poll).
+        coder_blocked = next(
+            (f"{role} ({path}): {why}" for role, name, path, why in blocked if role == "coder"), "")
+        if coder_blocked:
+            self._defer(roles, feature, coder_blocked)
+            return []
+        if blocked:
+            self._note_blocked_roles(roles, blocked)
 
         self._last_deferral = None
         self._deferrals.pop(feature_id, None)
@@ -819,6 +896,19 @@ class PlanFlow:
         actions.append(self._advance(feature_id, roles, head, warnings))
         planlib.update_feature(self.plan_dir, feature_id, synced_at=now_iso())
         return actions
+
+    def _note_blocked_roles(self, roles, blocked):
+        """Tell the specifier which role could not be moved onto the merged base."""
+        detail = "; ".join(f"{role}: {why}" for role, name, path, why in blocked)
+        self._log("sync-partial", detail)
+        self._note_once(
+            roles, f"blocked:{detail}",
+            f"Worktree not synced: {blocked[0][0]}."[:80],
+            f"Some role worktrees could not be moved onto the merged base commit: {detail}. "
+            f"The other roles were updated and the next feature was dispatched, but the "
+            f"listed worktrees are still on the previous base. Tell the user: finish or "
+            f"discard that work (commit, stash or abort the git operation, empty the "
+            f"outbox) and SwarmForge retries on its own, or they run `swarm plan sync`.")
 
     def _worktree_blocker(self, role, name, path, head, final):
         """Why this worktree must not be reset now ('' = safe). May create a
@@ -846,12 +936,13 @@ class PlanFlow:
         status = self._g("status", "--porcelain", "--ignored", cwd=path)
         if status.rc != 0:
             return f"git status failed ({status.err})"
+        entries = worktree_ops.parse_status(status.out)
         collide_check = []
-        for line in status.out.splitlines():
-            if line.startswith("!! "):
-                collide_check.append(("ignored", line[3:]))
-            elif line.startswith("?? ") and swarm_owned_untracked(line[3:]):
-                collide_check.append(("untracked", line[3:]))  # checkout must not overwrite it either
+        for kind, name in entries:
+            if kind == worktree_ops.IGNORED:
+                collide_check.append(("ignored", name))
+            elif kind == worktree_ops.UNTRACKED and swarm_owned_untracked(name):
+                collide_check.append(("untracked", name))  # checkout must not overwrite it either
             else:
                 return "has uncommitted or untracked changes"
         for kind, line in collide_check:
@@ -919,6 +1010,89 @@ class PlanFlow:
         return ""
 
     # -- 4. dispatch ---------------------------------------------------------------
+
+    def rebase_feature(self, feature_id, roles=None):
+        """Bring the role worktrees back onto the base and reopen the feature.
+
+        The supported recovery path for a feature that got stuck: every
+        worktree is put back on the base commit (the local commits that would
+        be dropped are kept in a backup ref) and the feature goes back to
+        `pending`, ready to be handed to the coder again.
+
+        The coder is reset even when it holds work that is not in the base
+        (the human asked for it); the other roles are only moved when they are
+        idle and clean, and the ones that could not be moved are named.
+
+        Returns (ok, message)."""
+        try:
+            plan = planlib.load(self.plan_dir)
+        except planlib.PlanError as e:
+            return False, str(e)
+        feature = planlib.feature_by_id(plan, feature_id)
+        if feature is None:
+            return False, f"Unknown feature '{feature_id}'."
+        base, err = self._targets(plan)
+        if err:
+            return False, err
+        if self._has_origin():
+            fetched = self._g("fetch", "origin", "--prune", timeout=self.t_fetch)
+            if fetched.rc != 0:
+                return False, f"git fetch origin failed: {fetched.err}"
+        target = f"origin/{base}" if self._has_origin() else base
+        head = self._resolve(target)
+        if not head:
+            return False, f"{target} does not resolve"
+        if roles is None:
+            roles = roles_from_tsv(self.root / ".swarmforge" / "roles.tsv")
+        detail = ""
+        blocked = []
+        for role, info in roles.items():
+            name, path = info.get("worktree-name", ""), info.get("worktree-path", "")
+            if not path or name in NO_WORKTREE or _same_path(path, self.root) or not Path(path).is_dir():
+                continue
+            if role == "coder":
+                ok, message = worktree_ops.ensure_descends(
+                    path, f"swarmforge-{name}", head, "coder", force=True)
+                if not ok:
+                    return False, message
+                detail = message
+                continue
+            blocker = self._worktree_blocker(role, name, path, head, "")
+            if blocker:
+                blocked.append(f"{role}: {blocker}")
+                continue
+            moved = self._g("checkout", "-q", "-B", f"swarmforge-{name}", head, cwd=path)
+            if moved.rc != 0:
+                blocked.append(f"{role}: checkout failed ({moved.err})")
+                continue
+            self._log("worktree-synced", role, head[:10], "(rebase)")
+        try:
+            planlib.reopen_feature(self.plan_dir, feature_id)
+        except planlib.PlanError as e:
+            return False, str(e)
+        self._log("reopened", feature_id, head[:10], detail)
+        message = (
+            f"Feature '{feature_id}' is back in 'pending' and the coder's worktree is on the "
+            f"base commit {head[:10]}. {detail} ".strip()
+        )
+        if blocked:
+            message += (
+                " These worktrees could not be moved onto the base and are still on the "
+                f"previous one: {'; '.join(blocked)}. "
+            )
+        if feature.get("pr_url"):
+            message += (
+                f" Its old pull request ({feature['pr_url']}) still points at the previous "
+                f"attempt: close it before handing the feature over again. "
+            )
+        message += (
+            "Hand it to the coder again (the specifier does it through the normal handoff)."
+        )
+        try:
+            self._send_note(roles, f"Feature {feature_id} reopened."[:80], message)
+        except Exception as e:  # noqa: BLE001 - the reopen itself succeeded
+            self._log("notify-error", repr(e))
+        return True, message
 
     def _advance_manual(self, merged_id, roles, warnings):
         plan = planlib.load(self.plan_dir)

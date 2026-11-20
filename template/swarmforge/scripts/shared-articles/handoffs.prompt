@@ -1,7 +1,7 @@
 # Handoff Rules
 
 ## Sending Handoffs
-- Write a draft handoff file with only structured headers, then run `swarm_handoff.sh <draft-file>`.
+- Write a draft handoff file with only structured headers, then run `swarm_handoff <draft-file>`.
 - Use only these message types:
   - `git_handoff`
   - `note`
@@ -65,7 +65,7 @@ priority: NN
 message: <one line, max 80 chars>
 ```
 
-- If `swarm_handoff.sh` reports validation errors, repair the draft and rerun it.
+- If `swarm_handoff` reports validation errors, repair the draft and rerun it.
 - After a successful send, the helper removes the draft file. If you need to
   remove a stale draft manually, use `rm <draft-file>`, not `rm -f`.
 - Do not write long handoff bodies. The helper generates the delivered payload.
@@ -73,10 +73,10 @@ message: <one line, max 80 chars>
 - Do not hand-edit, merge, stage, or commit handoff runtime state.
 
 ## Receiving Handoffs
-- When notified, run `ready_for_next.sh`.
-- If you are woken or told to check your inbox, only run `ready_for_next.sh`;
+- When notified, run `ready_for_next`.
+- If you are woken or told to check your inbox, only run `ready_for_next`;
   never start another agent or role.
-- `ready_for_next.sh` dispatches to the task or batch helper configured for
+- `ready_for_next` dispatches to the task or batch helper configured for
   your role.
 - If it prints `NO_TASK`, stop waiting for work.
 - If it prints `TASK: <path>`, treat the printed `PAYLOAD` as the task.
@@ -86,16 +86,16 @@ message: <one line, max 80 chars>
   current batch in helper-delivered order.
 - Use only the task information printed by the helper scripts.
 - If a pane wake-up arrives while already working on a task, ignore it.
-- When the task or batch is fully complete, run `done_with_current.sh`.
+- When the task or batch is fully complete, run `done_with_current`.
 - The coder, reviewer and architect must send their own `git_handoff` for the
-  task BEFORE running `done_with_current.sh`; it refuses (`REPLY_REQUIRED`)
+  task BEFORE running `done_with_current`; it refuses (`REPLY_REQUIRED`)
   otherwise. Only if a step legitimately ends without a reply, run
-  `done_with_current.sh --no-reply`.
+  `done_with_current --no-reply`.
 - `note` handoffs are tasks too; after reading or acting on a note, run
-  `done_with_current.sh` before accepting any other handoff.
-- If `done_with_current.sh` prints `TASK: <path>`, treat the printed `PAYLOAD`
+  `done_with_current` before accepting any other handoff.
+- If `done_with_current` prints `TASK: <path>`, treat the printed `PAYLOAD`
   as the next task.
-- If `done_with_current.sh` prints `BATCH: <path>`, treat each printed
+- If `done_with_current` prints `BATCH: <path>`, treat each printed
   `BATCH_ITEM` as part of the next batch in helper-delivered order.
 - If a done helper prints `NO_TASK`, stop waiting for work.
-- On restart, run `ready_for_next.sh` and follow its output.
+- On restart, run `ready_for_next` and follow its output.

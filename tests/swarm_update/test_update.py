@@ -130,6 +130,17 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse((self.project / "swarmforge" / "swarmforge.conf.bak").exists())
         self.assertTrue((self.project / ".swarmforge/handoffs/keep.txt").exists())
 
+    def test_update_delivers_the_windows_shims_and_bare_helper_names(self):
+        self.make_install()
+        result = run_update(self.project, "--languages", "Go")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        scripts = self.project / "swarmforge" / "scripts"
+        for name in ("ready_for_next", "done_with_current", "swarm_handoff"):
+            self.assertTrue((scripts / f"{name}.cmd").is_file(), name)
+        articles = (scripts / "shared-articles" / "handoffs.prompt").read_text(encoding="utf-8")
+        self.assertIn("`ready_for_next`", articles)
+        self.assertNotIn("ready_for_next.sh", articles)
+
     def test_reconcile_keeps_known_rows_and_removes_stale_role(self):
         self.make_install(stale=True)
         result = run_update(self.project, "--yes")

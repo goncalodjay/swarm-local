@@ -1063,6 +1063,32 @@ def reserve_feature(plan_dir, task, base_commit=None):
     return [], snapshot
 
 
+def reopen_feature(plan_dir, feature_id):
+    """Put a feature back in `pending` so it can be handed to the coder again.
+
+    The delivery state of the previous attempt (PR, final commit, review
+    rounds, base) is dropped, because the work starts again from a new base.
+    Used by `swarm plan rebase`, the supported recovery path when a feature
+    got stuck (a stale base, a PR that cannot be published, a feature that
+    has to be redone)."""
+    with plan_lock(plan_dir):
+        plan = load(plan_dir)
+        feature = feature_by_id(plan, feature_id)
+        if feature is None:
+            raise PlanError(f"Unknown feature '{feature_id}'.")
+        busy = [f.get("id") for f in in_progress_features(plan) if f.get("id") != feature_id]
+        if busy:
+            raise PlanError(
+                f"Feature '{busy[0]}' is still in progress and features are sequential, "
+                f"so '{feature_id}' cannot be reopened yet."
+            )
+        reset_runtime_counters(feature)
+        feature.pop("base_commit", None)
+        feature["status"] = "pending"
+        save(plan_dir, plan)
+    return plan
+
+
 def planned_transition(sender, recipients, verdict=None):
     """(from_status, to_status) a validated handoff implies, or None."""
     if len(recipients) != 1:
@@ -1370,6 +1396,35 @@ def _run_git_bounded(argv, cwd, timeout):
         _kill_process_tree(proc)
         return None
     return subprocess.CompletedProcess(argv, proc.returncode, out or "", err or "")
+
+
+def project_root(plan_dir):
+    """The master checkout that owns the plan (the root of the repository)."""
+    return _project_root(plan_dir)
+
+
+def resolve_commit(commit, root=None):
+    """Full hash of a commit abbreviation, resolved in the project root.
+
+    Returns '' when the commit does not resolve or git is not available."""
+    if not commit:
+        return ""
+    root = Path(root) if root else _project_root(locate_plan_dir())
+    r = _run_git_bounded(
+        ["git", "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"], root, 15)
+    return r.stdout.strip() if r is not None and r.returncode == 0 else ""
+
+
+def descends_from(base, commit, root=None):
+    """True when `commit` contains `base` in its history (or is `base`).
+
+    Used to prove that a feature's work starts from the commit the handoff
+    carried, so the finished commit descends from the recorded base."""
+    if not base or not commit:
+        return False
+    root = Path(root) if root else _project_root(locate_plan_dir())
+    r = _run_git_bounded(["git", "merge-base", "--is-ancestor", base, commit], root, 15)
+    return r is not None and r.returncode == 0
 
 
 def base_freshness(plan_dir, commit):

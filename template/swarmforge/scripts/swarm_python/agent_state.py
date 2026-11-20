@@ -26,6 +26,8 @@ Per role:
   idle_ticks      consecutive ticks herdr reported the agent idle
   stale_since / last_stale_nudge_at  epoch seconds a task has sat in
                   in_process while the agent is idle, and the last reminder
+  kiro_lookups / kiro_lookup_at  how many times and when the scheduler
+                  looked for the session id of a freshly launched kiro-cli
   fast_exits      consecutive launches whose agent exited right away while
                   work was pending; the scheduler stops retrying at a limit
 """
@@ -56,6 +58,8 @@ def blank_role(status: str = "parked") -> dict:
         "stale_since": None,
         "last_stale_nudge_at": None,
         "fast_exits": 0,
+        "kiro_lookups": 0,
+        "kiro_lookup_at": None,
     }
 
 

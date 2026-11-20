@@ -4,3 +4,7 @@
 *.bash text eol=lf
 
 template/toolchain/** binary
+
+# Helper shims for cmd.exe/PowerShell (the swarm/install .cmd files keep their own endings).
+swarmforge/scripts/*.cmd text eol=crlf
+template/swarmforge/scripts/*.cmd text eol=crlf

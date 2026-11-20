@@ -8,6 +8,7 @@ import os
 import subprocess
 
 from swarm_python import plan as planlib
+from swarm_python import worktree_ops
 from swarm_python.handoff.format import parse_draft
 from swarm_python.handoff.project import roles_file, state_dir
 from swarm_python.handoff.roles import role_known
@@ -16,7 +17,7 @@ from swarm_python.handoff.timefmt import now_iso, now_id_ts
 from swarm_python.handoff.validate import error_report, validate
 
 USAGE = """\
-Usage: swarm_handoff.sh <draft-file>
+Usage: swarm_handoff <draft-file>
 
 Draft formats:
 
@@ -140,10 +141,56 @@ def _head_commit():
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
-def mark_feature_coding(sender, headers, recipients, fallback_commit=None):
+def _base_commit(plan_dir, canonical_commit):
+    """The commit the feature starts from.
+
+    It is the commit the handoff carries (the specifier's `commit:` header),
+    NOT whatever the specifier's own checkout happens to be: the checkout can
+    be stale while the header is the tip of the freshly fetched base branch.
+    Falls back to the checkout's HEAD only when the header does not resolve."""
+    resolved = ""
+    if canonical_commit:
+        resolved = planlib.resolve_commit(
+            canonical_commit, root=planlib.project_root(plan_dir))
+    return resolved or _head_commit() or canonical_commit or ""
+
+
+def _coder_base_problem(plan_dir, base_commit):
+    """Why the coder's worktree cannot start from `base_commit` ('' = it can).
+
+    The work must be built on the merged base, otherwise the feature stacks on
+    commits the base branch does not contain and the PR is refused at publish
+    time, after the whole code/review/architect cycle was already spent. This
+    check runs when the feature STARTS, so the problem is found early."""
+    if not base_commit:
+        return ""
+    roles = worktree_ops.roles_from_tsv(Path(plan_dir).parent / "roles.tsv")
+    info = roles.get("coder") or {}
+    path = info.get("worktree-path") or ""
+    name = info.get("worktree-name") or ""
+    if not path or name in ("none", "master") or not Path(path).is_dir():
+        return ""
+    ok, message = worktree_ops.ensure_descends(
+        path, f"swarmforge-{name}", base_commit, "coder")
+    if ok:
+        if message:
+            print(f"Plan check: {message}", file=sys.stderr)
+        return ""
+    return (
+        f"The coder's worktree is not on the base commit of this handoff: {message}. "
+        f"Reconcile it (rebase or reset it onto {base_commit[:10]}) or run "
+        f"`swarm plan rebase <feature-id>` and hand the feature off again."
+    )
+
+
+def mark_feature_coding(sender, headers, recipients, base_commit=None):
     """Reserve the handed-off feature: re-check the gate and move it to
     `coding` under the plan lock, recording the base commit. Returns
     (snapshot, errors); `snapshot` is None when nothing was reserved.
+
+    The recorded base is the commit the handoff carries (the `commit:` header),
+    so the finished commit descends from the base the feature really started
+    from, not from whatever the specifier's checkout happened to be.
 
     Ordering (validate -> mark coding -> write outbox -> remove draft) is the
     safest of the options: if the process dies after marking but before the
@@ -159,7 +206,7 @@ def mark_feature_coding(sender, headers, recipients, fallback_commit=None):
     if not _is_feature_handoff(sender, headers, recipients):
         return None, []
     task = headers.get("task", "")
-    base = _head_commit() or fallback_commit
+    base = base_commit or _head_commit()
     try:
         errors, snapshot = planlib.reserve_feature(planlib.locate_plan_dir(), task, base)
     except (planlib.PlanError, OSError) as e:
@@ -194,6 +241,34 @@ ESCALATION_TEXT = (
 )
 
 
+def _descent_warning(plan_dir, task, commit):
+    """Warning when the coder's commit does not descend from the base commit
+    the feature started from.
+
+    It is a warning and not an error: the review still happens, but the coder
+    is told to rebase BEFORE the review is finished, instead of the PR being
+    refused at publish time when the whole cycle was already spent."""
+    if not task or not commit:
+        return ""
+    try:
+        feature = planlib.feature_by_id(planlib.load(plan_dir), task)
+    except planlib.PlanError:
+        return ""
+    if feature is None:
+        return ""
+    base = feature.get("base_commit")
+    if not base:
+        return ""
+    if planlib.descends_from(base, commit, root=planlib.project_root(plan_dir)):
+        return ""
+    return (
+        f"Plan check: the commit {commit[:10]} does not descend from the base commit "
+        f"{str(base)[:10]} this feature started from. The review will see the difference "
+        f"against the wrong base: the coder must rebase onto {str(base)[:10]} before the "
+        f"review is finished."
+    )
+
+
 def apply_feature_transition(sender, headers, recipients, canonical_commit, extra_body):
     """Status move for coder/reviewer/architect handoffs of a plan feature.
     Returns (transition, extra_body); transition is None for legacy tasks.
@@ -210,6 +285,13 @@ def apply_feature_transition(sender, headers, recipients, canonical_commit, extr
         except Exception as e:  # advisory only: never block the handoff
             print(f"Plan check skipped: {e}", file=sys.stderr)
             metrics = None
+        try:
+            warning = _descent_warning(plan_dir, task, canonical_commit)
+        except Exception:  # noqa: BLE001 - advisory only
+            warning = ""
+        if warning:
+            print(f"WARNING: {warning}", file=sys.stderr)
+            extra_body = f"{extra_body}\n\n{warning}" if extra_body else warning
     try:
         transition = planlib.apply_handoff_transition(
             plan_dir, sender, recipients, task, headers.get("verdict"), metrics,
@@ -268,18 +350,28 @@ def main():
         error_report(draft, all_errors)
         sys.exit(2)
 
+    plan_dir = planlib.locate_plan_dir()
+    base = ""
     if _is_feature_handoff(sender, parsed["headers"], validation["recipients"]):
         stale_errors, stale_warnings = planlib.base_freshness(
-            planlib.locate_plan_dir(), validation["canonical-commit"],
+            plan_dir, validation["canonical-commit"],
         )
         for warning in stale_warnings:
             print(f"WARNING: {warning}", file=sys.stderr)
         if stale_errors:
             error_report(draft, stale_errors)
             sys.exit(2)
+        # The feature starts from the commit the handoff carries, and the
+        # coder's worktree must be on it. Both are checked BEFORE the feature
+        # is reserved, so a problem is reported now and not at publish time.
+        base = _base_commit(plan_dir, validation["canonical-commit"])
+        problem = _coder_base_problem(plan_dir, base)
+        if problem:
+            error_report(draft, [problem])
+            sys.exit(2)
 
     snapshot, gate_errors = mark_feature_coding(
-        sender, parsed["headers"], validation["recipients"], validation["canonical-commit"],
+        sender, parsed["headers"], validation["recipients"], base,
     )
     if gate_errors:
         error_report(draft, gate_errors)

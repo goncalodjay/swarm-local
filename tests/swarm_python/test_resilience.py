@@ -333,7 +333,7 @@ class DoneWithCurrentTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("REPLY_REQUIRED", err)
         self.assertIn("'a'", err)
-        self.assertIn("swarm_handoff.sh", err)
+        self.assertIn("swarm_handoff", err)
         self.assertIn("--no-reply", err)
         self.assertTrue(current.exists())
         self.assertEqual(self.completed(), [])

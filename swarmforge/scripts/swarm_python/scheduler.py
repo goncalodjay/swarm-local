@@ -22,9 +22,9 @@ role's agent alive and idle, the handoff daemon calls `tick` every poll:
   idle ticks is it stopped (verified) and relaunched. The first role (the
   human-facing specifier) is never stopped and only typed into while idle.
   Mail that arrives while a task is in progress is read when the agent runs
-  done_with_current.sh / ready_for_next.sh. A role that must reply to its task
+  done_with_current / ready_for_next. A role that must reply to its task
   (REPLY_REQUIRED_ROLES) and sits idle on it for STALE_TASK_S with no reply
-  sent is reminded to continue or run done_with_current.sh.
+  sent is reminded to continue or run done_with_current.
 - Agents still booting (START_GRACE_S + BOOT_MARGIN_S) are not woken.
 - Stopping an agent is verified: a role is marked parked only when the pane's
   foreground is back at its shell, and the launcher is never typed into a
@@ -36,6 +36,7 @@ arrives while the sender is still finishing up.
 
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 
@@ -43,7 +44,7 @@ from .env import env_long
 from .handoff.format import header_field
 from .handoff.inbox import batch_dirs, handoff_files
 from .handoff.validate import REPLY_REQUIRED_ROLES
-from .sessions import plan_session
+from .sessions import find_kiro_session, plan_session
 
 PARK_GRACE_S = env_long("SWARMFORGE_PARK_GRACE_MS", 15000) / 1000
 # Right after a launch the pane still shows its shell until the wrapper
@@ -62,6 +63,10 @@ WAKE_GIVEUP_S = env_long("SWARMFORGE_WAKE_GIVEUP_MS", 1800000) / 1000
 GIVEUP_IDLE_TICKS = 3
 STALE_IDLE_TICKS = 3
 BOOT_MARGIN_S = 10
+# A fresh kiro-cli launch has its session id looked up this often, this many
+# times (each lookup is a bounded subprocess call on the scheduler thread).
+KIRO_LOOKUP_EVERY_S = 10
+KIRO_LOOKUP_MAX = 6
 WAKE_DOUBLE_SUBMIT_S = 60
 FG_UNKNOWN_LAUNCH_S = 30
 RECENT_LAUNCH_S = 120
@@ -71,9 +76,9 @@ STOP_VERIFY_POLLS = 5
 STOP_VERIFY_INTERVAL_S = 1
 LOG_REPEAT_S = 60
 IDLE_STATUSES = {"idle", "done"}
-WAKE_MESSAGE = "You have new handoff mail. If idle, run ready_for_next.sh."
+WAKE_MESSAGE = "You have new handoff mail. If idle, run ready_for_next."
 STALE_MESSAGE = (
-    "You have a task in progress. Continue the current task or run done_with_current.sh."
+    "You have a task in progress. Continue the current task or run done_with_current."
 )
 
 
@@ -129,7 +134,7 @@ def has_stale_candidate(worktree: Path) -> bool:
 
 def next_task(worktree: Path, fallback: str) -> str:
     """Feature name of the work the role will pick up next, in the order
-    ready_for_next.sh hands it out. Notes carry no task: keep the current."""
+    ready_for_next hands it out. Notes carry no task: keep the current."""
     inbox = _inbox(worktree)
     candidates = handoff_files(inbox / "in_process")
     for batch in batch_dirs(inbox / "in_process"):
@@ -143,7 +148,8 @@ def next_task(worktree: Path, fallback: str) -> str:
 
 
 class Scheduler:
-    def __init__(self, rows, herdr, launcher, log, clock=time.time, sleep=time.sleep):
+    def __init__(self, rows, herdr, launcher, log, clock=time.time, sleep=time.sleep,
+                 kiro_lookup=find_kiro_session):
         """rows: RoleRow list in config order (index 0 is the specifier).
         herdr: object with pane_statuses() -> {pane_id: status},
                foreground(pane_id) -> (pgid, shell_pid),
@@ -156,6 +162,7 @@ class Scheduler:
         self.log = log
         self.clock = clock
         self.sleep = sleep
+        self.kiro_lookup = kiro_lookup  # (cwd, since_epoch) -> (session_id | None, reason)
         self._logged = {}       # key -> (signature, time) for rate-limited logs
         self._fg_unknown = {}   # role -> clock() since which the foreground has been continuously unknown
         self._stops_this_tick = 0
@@ -180,10 +187,13 @@ class Scheduler:
         role = row.role
         self._stops_this_tick += 1
         try:
-            self.herdr.stop(row.pane_id)
+            outcome = self.herdr.stop(row.pane_id)
         except Exception as e:  # noqa: BLE001
             self.log("stop-error", role, repr(e))
             return False
+        if outcome == "failed":
+            self.log("park-failed", role,
+                     "the agent did not exit after the interrupt, /exit and the process tree kill")
         pgid, shell_pid = None, None
         for attempt in range(STOP_VERIFY_POLLS):
             pgid, shell_pid = self.herdr.foreground(row.pane_id)
@@ -248,6 +258,7 @@ class Scheduler:
 
         if since_launch >= FAST_EXIT_S:
             st["fast_exits"] = 0
+        self._record_kiro_session(row, st, now)
         idle = statuses.get(row.pane_id) in IDLE_STATUSES
         st["idle_ticks"] = st["idle_ticks"] + 1 if idle else 0
         if not self._wake_if_mail_is_waiting(index, row, st, idle, statuses, now):
@@ -278,6 +289,28 @@ class Scheduler:
             self.log("park-pending", row.role, "agent still in the foreground; staying running")
             st["idle_since"] = now  # look again after another grace period
         return True
+
+    def _record_kiro_session(self, row, st, now) -> None:
+        """kiro-cli picks its own session id. Find the one a fresh launch
+        created (by worktree and launch time) and keep it in the role state:
+        that stored id is the only one a later launch will resume."""
+        if (row.agent != "kiro-cli" or st["session_id"] or st["launched_at"] is None
+                or st["kiro_lookups"] >= KIRO_LOOKUP_MAX):
+            return
+        reference = st["kiro_lookup_at"] if st["kiro_lookup_at"] is not None else st["launched_at"]
+        if now - reference < KIRO_LOOKUP_EVERY_S:
+            return
+        st["kiro_lookup_at"] = now
+        st["kiro_lookups"] += 1
+        found, reason = self.kiro_lookup(row.worktree_path, st["launched_at"])
+        if found:
+            st["session_id"] = found
+            self.log("kiro-session-recorded", row.role, found)
+            return
+        self.log("kiro-session-lookup", row.role, f"attempt={st['kiro_lookups']}", reason)
+        if st["kiro_lookups"] >= KIRO_LOOKUP_MAX:
+            self.log("kiro-session-unrecorded", row.role,
+                     "gave up; the next launch for this feature starts fresh")
 
     @staticmethod
     def _booting(st, now) -> bool:
@@ -365,6 +398,9 @@ class Scheduler:
             return
         task = next_task(row.worktree_path, st["task"])
         plan = plan_session(row.agent, row.role, task, st)
+        if row.agent == "kiro-cli" and plan and not plan.resume and st["task"] == task and task:
+            self.log("kiro-resume-fallback", row.role, f"task={task}",
+                     "no recorded session id for this feature; starting fresh")
         self.log(
             "launching", row.role, f"task={task or '-'}",
             "resume" if plan and plan.resume else "fresh",
@@ -383,6 +419,8 @@ class Scheduler:
             stale_since=None,
             last_stale_nudge_at=None,
             idle_ticks=0,
+            kiro_lookups=0,
+            kiro_lookup_at=None,
         )
         self._fg_unknown.pop(row.role, None)
 
@@ -445,27 +483,93 @@ class HerdrPanes:
         """Stop whatever runs in the pane (agent plus its launch wrapper)
         and leave the pane at its shell. Stopping the wrapper too matters:
         the specifier's wrapper tears the whole swarm down when its agent
-        exits, which must only happen when a human quits it."""
-        from .herdr_ops import pane_foreground, pane_send_keys
+        exits, which must only happen when a human quits it.
+
+        Returns 'stopped' (the pane is back at its shell), 'already-stopped'
+        (nothing was running) or 'failed' (the agent is still alive). The
+        caller must not mark the role parked unless the answer is not
+        'failed': an agent that survived the stop would receive the next
+        wake-up inside its own prompt."""
+        from .herdr_ops import pane_foreground
         pgid, shell_pid = pane_foreground(self.session, pane_id)
         if pgid is None or pgid == shell_pid:
-            return
+            return "already-stopped"
         if not hasattr(os, "killpg"):
-            # Windows: no process groups to signal; interrupt the agent.
-            # The caller verifies the foreground afterwards; a busy agent may
-            # ignore the first interrupt, so give it a moment before the second.
-            pane_send_keys(self.session, pane_id, "C-c")
-            self.sleep(1)
-            pane_send_keys(self.session, pane_id, "C-c")
-            return
+            return self._stop_windows(pane_id, pgid)
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.killpg(pgid, sig)
             except ProcessLookupError:
-                return
+                return "stopped"
             deadline = time.monotonic() + STOP_TIMEOUT_S
             while time.monotonic() < deadline:
                 current, _ = pane_foreground(self.session, pane_id)
                 if current != pgid:
-                    return
+                    return "stopped"
                 time.sleep(0.2)
+        return "failed"
+
+    # -- Windows: no process groups to signal -------------------------------------
+
+    def _stop_windows(self, pane_id, pgid):
+        """Interrupt, ask the agent to quit and then kill its process tree.
+
+        A busy agent can ignore a Ctrl-C, and a role that the scheduler
+        believes is parked while its agent is still alive is a trap: the next
+        handoff would be typed into that live agent. So the ladder goes all
+        the way to a tree kill, and says so when even that does not work."""
+        self._interrupt(pane_id)
+        if self._agent_gone(pane_id):
+            return "stopped"
+        self._exit_command(pane_id)
+        if self._agent_gone(pane_id):
+            return "stopped"
+        self._kill_tree(pgid)
+        if self._agent_gone(pane_id):
+            return "stopped"
+        return "failed"
+
+    def _interrupt(self, pane_id):
+        """Two Ctrl-Cs with a pause: the first one may be swallowed while the
+        agent is busy."""
+        from .herdr_ops import pane_send_keys
+        pane_send_keys(self.session, pane_id, "C-c")
+        self.sleep(1)
+        pane_send_keys(self.session, pane_id, "C-c")
+        self.sleep(1)
+
+    def _exit_command(self, pane_id):
+        """The agent's own exit command, for the agents that ignore Ctrl-C.
+
+        `pane run` types the line and presses Enter, so the command is really
+        submitted (a key sequence alone would only fill the prompt)."""
+        from .herdr_ops import pane_run
+        pane_run(self.session, pane_id, "/exit")
+        self.sleep(2)
+
+    def _kill_tree(self, pgid):
+        """taskkill /T /F on the agent's process tree (Windows only)."""
+        pid = self._pid_of(pgid)
+        if not pid:
+            return
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True, timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+
+    @staticmethod
+    def _pid_of(pgid):
+        try:
+            pid = int(pgid)
+        except (TypeError, ValueError):
+            return None
+        return pid if pid > 0 else None
+
+    def _agent_gone(self, pane_id):
+        """True when the pane is back at its shell (or herdr cannot tell)."""
+        from .herdr_ops import pane_foreground
+        current, shell_pid = pane_foreground(self.session, pane_id)
+        return current is None or current == shell_pid

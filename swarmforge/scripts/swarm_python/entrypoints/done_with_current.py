@@ -19,12 +19,12 @@ READY_FOR_NEXT = Path(__file__).resolve().parent / "ready_for_next.py"
 NO_REPLY_FLAG = "--no-reply"
 
 USAGE = f"""\
-Usage: done_with_current.sh [{NO_REPLY_FLAG}]
+Usage: done_with_current [{NO_REPLY_FLAG}]
 
 Marks the handoff you are working on as completed and picks up the next one.
 
 For the coder, reviewer and architect, the handoff must have been answered
-first: send your own git_handoff with swarm_handoff.sh, then run this script.
+first: send your own git_handoff with swarm_handoff, then run this script.
 It refuses to complete the work otherwise, because nothing would move the
 feature forward.
 
@@ -83,9 +83,9 @@ def require_reply(role, current_files, no_reply):
         "REPLY_REQUIRED: you have not sent a handoff for "
         + ", ".join(f"'{t}'" for t in missing)
         + " since you picked it up. Nothing was completed.",
-        f"Send your git_handoff (to {targets}) with swarm_handoff.sh first, "
-        "then run done_with_current.sh again.",
-        f"If this step legitimately ends without a reply, run: done_with_current.sh {NO_REPLY_FLAG}",
+        f"Send your git_handoff (to {targets}) with swarm_handoff first, "
+        "then run done_with_current again.",
+        f"If this step legitimately ends without a reply, run: done_with_current {NO_REPLY_FLAG}",
     )
 
 
@@ -110,7 +110,7 @@ def run_task_mode(role, no_reply=False):
     if in_process_batches:
         fail(
             2,
-            "CURRENT_WORK_IS_BATCH: use done_with_current.sh.",
+            "CURRENT_WORK_IS_BATCH: use done_with_current.",
             "\n".join(f"- {b}" for b in in_process_batches),
         )
 
@@ -146,7 +146,7 @@ def run_batch_mode(role, no_reply=False):
     if in_process_files:
         fail(
             2,
-            "CURRENT_WORK_IS_SINGLE_TASK: use done_with_current.sh.",
+            "CURRENT_WORK_IS_SINGLE_TASK: use done_with_current.",
             "\n".join(f"- {f}" for f in in_process_files),
         )
 
