@@ -830,6 +830,13 @@ class LaunchCommandTest(unittest.TestCase):
         (root / ".swarmforge" / "prompts").mkdir(parents=True)
         self.ctx = build_context(root, SCRIPTS)
         self.root = root
+        # Resolve agents to native binaries so commands do not depend on how
+        # they are installed on the host (a .cmd shim changes the prompt form).
+        # shutil.which is patched process-wide, so look up real tools first.
+        self.bash = shutil.which("bash")
+        which = mock.patch("swarm_python.launch.shutil.which", side_effect=lambda a: f"/usr/bin/{a}")
+        which.start()
+        self.addCleanup(which.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -1001,7 +1008,7 @@ class LaunchCommandTest(unittest.TestCase):
         return build_launch_command(self.ctx, index, row, None)
 
     def test_the_script_exits_with_the_agent_status_for_every_role(self):
-        bash = shutil.which("bash")
+        bash = self.bash
         if not bash:
             self.skipTest("bash not available")
         for index in (0, 1):
