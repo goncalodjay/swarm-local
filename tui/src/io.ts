@@ -289,7 +289,9 @@ export class FileSystemTuiIO implements TuiIO {
   }
 
   queryHerdrAgents(): Promise<HerdrAgent[]> {
-    return queryHerdrAgentsImpl();
+    const herdrSession = this.socketPath();
+    if (herdrSession === "") return Promise.resolve([]);
+    return queryHerdrAgentsImpl(herdrSession);
   }
 
   stopSwarm(): Promise<void> {

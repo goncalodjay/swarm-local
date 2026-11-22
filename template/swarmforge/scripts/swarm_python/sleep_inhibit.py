@@ -5,13 +5,17 @@ from .deps import command_exists
 
 
 def _uname():
-    r = subprocess.run(["uname", "-s"], capture_output=True, text=True)
+    r = subprocess.run(
+        ["uname", "-s"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
     return r.stdout.strip()
 
 
 def _linux_systemd_running():
     r = subprocess.run(
-        ["systemctl", "is-system-running"], capture_output=True, text=True
+        ["systemctl", "is-system-running"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     state = r.stdout.strip()
     return state in ("running", "degraded")

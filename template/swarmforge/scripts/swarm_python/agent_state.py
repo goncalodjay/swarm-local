@@ -19,9 +19,15 @@ Per role:
   sent_since_launch  the role forwarded a handoff since its last launch
   idle_since      epoch seconds herdr first reported it idle with no
                   pending work (None while busy)
-  mail_waiting_since  epoch seconds it was first seen idle with unread mail
-                  and nothing in progress (None otherwise); drives re-sent
-                  wake-ups
+  wake_pending_since  epoch seconds unread mail (inbox/new, nothing in
+                  progress) was first seen for a running agent (None
+                  otherwise); wake_attempts / last_wake_at count and time the
+                  re-sent wake-ups, which stop once the mail is picked up
+  idle_ticks      consecutive ticks herdr reported the agent idle
+  stale_since / last_stale_nudge_at  epoch seconds a task has sat in
+                  in_process while the agent is idle, and the last reminder
+  kiro_lookups / kiro_lookup_at  how many times and when the scheduler
+                  looked for the session id of a freshly launched kiro-cli
   fast_exits      consecutive launches whose agent exited right away while
                   work was pending; the scheduler stops retrying at a limit
 """
@@ -45,8 +51,15 @@ def blank_role(status: str = "parked") -> dict:
         "launched_at": None,
         "sent_since_launch": False,
         "idle_since": None,
-        "mail_waiting_since": None,
+        "wake_pending_since": None,
+        "wake_attempts": 0,
+        "last_wake_at": None,
+        "idle_ticks": 0,
+        "stale_since": None,
+        "last_stale_nudge_at": None,
         "fast_exits": 0,
+        "kiro_lookups": 0,
+        "kiro_lookup_at": None,
     }
 
 

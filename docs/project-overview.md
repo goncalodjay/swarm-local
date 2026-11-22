@@ -17,7 +17,7 @@ swarm-local/
 │   │   ├── scripts/            # backend Python: herdr, handoffs
 │   │   ├── roles/              # prompts por rol (specifier, coder, reviewer, architect)
 │   │   └── constitution*       # archivo base que cada rol lee
-│   └── toolchain/              # binarios auxiliares (gherkin-*) que swarm-init copia a .swarmforge
+│   └── toolchain/              # binarios auxiliares (gherkin-*) por plataforma (<triple>/bin); swarm-init copia el del equipo a .swarmforge
 │
 ├── tui/                        # dashboard OpenTUI; se compila con Bun y produce un ELF standalone
 │   ├── main.ts                 # entry del TUI

@@ -70,6 +70,10 @@ async function runTui(rootSpan: { update: (attrs: Record<string, unknown>) => vo
       // The app owns quitting so it can restore the terminal and flush
       // traces first.
       exitOnCtrlC: false,
+      // Mouse reporting is on by default in OpenTUI. On Windows consoles its
+      // SGR reports (ESC [ < b ; x ; y M) reach stdin without the ESC byte,
+      // so they arrive as printable keys and swallow arrows and Enter.
+      useMouse: false,
     });
   } catch (err) {
     log.fatal({ event: "renderer_start_failed", err }, "cannot start renderer");
@@ -149,6 +153,18 @@ async function runTui(rootSpan: { update: (attrs: Record<string, unknown>) => vo
   pollTimer.unref?.();
 
   renderer.keyInput.on("keypress", (parsed: ParsedKey) => {
+    // TEMP diagnostic: what OpenTUI reports for each key on this terminal.
+    log.info(
+      {
+        event: "key_raw",
+        name: parsed.name,
+        ctrl: parsed.ctrl,
+        shift: parsed.shift,
+        sequence: parsed.sequence,
+        hex: Array.from(parsed.sequence ?? "").map((c) => c.charCodeAt(0).toString(16)).join(" "),
+      },
+      "raw key event",
+    );
     if (app.view === "attached") return;
     const key = keyFromParsed(parsed);
     if (!key) return;
