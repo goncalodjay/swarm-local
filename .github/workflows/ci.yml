@@ -31,6 +31,12 @@ jobs:
           /bin/bash -n install.sh
           /bin/bash -n bin/swarm-kura
           /bin/bash -n swarm-init
+      - name: swarm-init refuses bash 3.2 with a clear message
+        run: |
+          PATH=/usr/bin:/bin ./swarm-init --help 2>err.txt && exit 1 || true
+          grep -q "bash >= 4" err.txt || { cat err.txt; exit 1; }
+      - name: Install bash >= 4 (what install.sh does on macOS)
+        run: brew install bash
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
