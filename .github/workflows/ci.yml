@@ -14,9 +14,12 @@ jobs:
       - name: Check bash scripts
         run: |
           set -e
-          while IFS= read -r script; do
-            bash -n "$script"
-          done < <(find . -name '*.sh' -not -path './node_modules/*' -not -path './tui/node_modules/*' -print0 | xargs -0)
+          # One file per `bash -n` (the old loop passed every path as one name).
+          find . -name '*.sh' -not -path '*/node_modules/*' -print0 | xargs -0 -n1 bash -n
+          bash -n swarm-init
+          bash -n bin/swarm-kura
+          bash -n swarm
+          bash -n template/swarm
 
   macos:
     name: macOS (bash 3.2 + python tests)
