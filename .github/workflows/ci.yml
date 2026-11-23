@@ -18,6 +18,24 @@ jobs:
             bash -n "$script"
           done < <(find . -name '*.sh' -not -path './node_modules/*' -not -path './tui/node_modules/*' -print0 | xargs -0)
 
+  macos:
+    name: macOS (bash 3.2 + python tests)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap scripts parse under the system bash 3.2
+        run: |
+          /bin/bash -n install.sh
+          /bin/bash -n bin/swarm-kura
+          /bin/bash -n swarm-init
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python tests
+        run: |
+          python -m pip install -q pytest
+          python -m pytest -q tests
+
   python-compile:
     name: py_compile
     runs-on: ubuntu-latest
@@ -38,7 +56,7 @@ jobs:
       - name: Build TUI on linux-x64
         working-directory: tui
         run: |
-          bun install --frozen-lockfile
+          bun install
           bun run build
       - name: Upload linux-x64 artifact
         uses: actions/upload-artifact@v4

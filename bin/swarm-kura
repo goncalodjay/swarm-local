@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+#
+# swarm-kura — install, update and reconfigure SwarmForge projects.
+#
+# Lives in ~/.swarm-kura/versions/<version>/bin (installed by install.sh) or in
+# a clone of the repo (dev mode). Compatible with bash 3.2 (macOS /bin/bash);
+# swarm-init re-execs itself under bash >= 4 when it needs it.
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  dir="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$dir/$SOURCE" ;; esac
+done
+ROOT="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+KURA_HOME="${SWARM_KURA_HOME:-$HOME/.swarm-kura}"
+
+if [ -t 2 ]; then
+  C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'; C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RESET=$'\033[0m'
+else
+  C_BOLD=""; C_DIM=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_RESET=""
+fi
+info() { printf '%s\n' "$*" >&2; }
+ok() { printf '  %s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*" >&2; }
+warn() { printf '  %s!%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+bad() { printf '  %s✗%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+die() { printf '%sError:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# --- version of this copy -----------------------------------------------------
+info_field() { # info_field <key>
+  [ -f "$ROOT/INSTALL_INFO" ] || return 0
+  sed -n "s/^$1=//p" "$ROOT/INSTALL_INFO" | head -n 1
+}
+kura_version() {
+  if [ -f "$ROOT/INSTALL_INFO" ]; then
+    basename "$ROOT"
+  elif [ -d "$ROOT/.git" ] && have git; then
+    printf 'dev-%s\n' "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  else
+    printf 'dev\n'
+  fi
+}
+config_field() { # config_field <key>
+  [ -f "$KURA_HOME/config" ] || return 0
+  sed -n "s/^$1=//p" "$KURA_HOME/config" | head -n 1
+}
+
+# --- python -------------------------------------------------------------------
+# shellcheck source=../template/swarmforge/scripts/lib/python.sh
+. "$ROOT/template/swarmforge/scripts/lib/python.sh"
+need_python() {
+  find_python || die "Hace falta Python >= 3.10 (macOS: brew install python@3.12). Revisá con: swarm-kura doctor"
+}
+
+# --- project ------------------------------------------------------------------
+# find_project [dir]: nearest ancestor (inclusive) holding swarmforge/swarmforge.conf.
+find_project() {
+  local dir
+  dir="$(cd "${1:-$PWD}" 2>/dev/null && pwd)" || return 1
+  while :; do
+    if [ -f "$dir/swarmforge/swarmforge.conf" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    [ "$dir" = "/" ] && return 1
+    dir="$(dirname "$dir")"
+  done
+}
+require_project() {
+  PROJECT="$(find_project "${1:-}")" || die "No hay un proyecto con SwarmForge en ${1:-$PWD} (ni en sus padres). Instalalo con: swarm-kura init"
+}
+project_version() { # version of swarm-kura that last installed/updated the project
+  [ -f "$1/.swarmforge/kura-version" ] && tr -d '\r\n' <"$1/.swarmforge/kura-version" || true
+}
+stamp_project() {
+  mkdir -p "$1/.swarmforge"
+  kura_version >"$1/.swarmforge/kura-version"
+}
+
+host_triple() {
+  local os arch m
+  case "$(uname -s)" in
+    Linux) os=linux ;; Darwin) os=darwin ;; MINGW* | MSYS* | CYGWIN*) os=windows ;; *) os=unknown ;;
+  esac
+  m="$(uname -m)"
+  [ "$os" = windows ] && m="${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE:-$m}}"
+  case "$m" in x86_64 | amd64 | AMD64 | x64) arch=x64 ;; arm64 | aarch64 | ARM64) arch=arm64 ;; *) arch="$m" ;; esac
+  if [ "$os" = darwin ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = 1 ]; then
+    arch=arm64
+  fi
+  printf '%s-%s\n' "$os" "$arch"
+}
+
+run_swarm_init() {
+  SWARMFORGE_PLATFORM="$(host_triple)" "$ROOT/swarm-init" "$@"
+}
+
+# ==============================================================================
+# Commands
+# ==============================================================================
+
+cmd_help() {
+  cat >&2 <<EOF
+${C_BOLD}swarm-kura${C_RESET} $(kura_version) — SwarmForge para tus proyectos
+
+${C_BOLD}Uso:${C_RESET} swarm-kura <comando> [opciones]
+
+  init [dir] [-l "Go, SQL"]   Instala el swarm en un proyecto (wizard de agentes y modelos)
+  change [rol...]             Cambia agente, modelo o thinking de uno o más roles
+      --agent A --model M [--provider P] [--thinking T]   (sin preguntas)
+      --from-agent claude --agent codex --model gpt-5.6-luna   (todos los roles de un agente)
+      --all, --list
+  update [dir]                Actualiza swarm-kura a la última versión y el proyecto actual
+      --check                 solo informa si hay una versión nueva
+      --force, --version TAG, --branch NOMBRE, --no-project, -y
+  run | start [dir]           Arranca el swarm (./swarm) del proyecto
+  stop [dir] · tui [dir]      Detiene el swarm · reabre la TUI
+  plan ...                    Pasa el comando a ./swarm plan
+  doctor [dir]                Revisa dependencias, agentes y la instalación del proyecto
+  version                     Versión instalada
+  uninstall                   Desinstala swarm-kura (no toca los proyectos)
+
+Los comandos de proyecto buscan swarmforge/swarmforge.conf en el directorio actual o sus padres.
+EOF
+}
+
+cmd_version() {
+  local channel ref
+  channel="$(info_field channel)"
+  ref="$(info_field ref)"
+  printf 'swarm-kura %s\n' "$(kura_version)"
+  [ -z "$channel" ] || printf '  canal: %s (%s)\n' "$channel" "$ref"
+  printf '  instalado en: %s\n' "$ROOT"
+}
+
+cmd_init() {
+  local target="" args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -l | --languages) args+=("$1" "${2:?$1 necesita un valor}"); shift ;;
+      -y | --yes) args+=("$1") ;;
+      -h | --help) "$ROOT/swarm-init" --help; return 0 ;;
+      -*) die "Opción desconocida para init: $1" ;;
+      *) target="$1" ;;
+    esac
+    shift
+  done
+  target="$(cd "${target:-$PWD}" && pwd)"
+  if [ -f "$target/swarmforge/swarmforge.conf" ]; then
+    info "Ya hay un swarm instalado en $target."
+    info "  · para cambiar agentes/modelos: swarm-kura change"
+    info "  · para actualizarlo:            swarm-kura update"
+    return 1
+  fi
+  if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    warn "$target no es un repositorio git; ./swarm lo inicializa al arrancar."
+  fi
+  run_swarm_init ${args[@]+"${args[@]}"} "$target"
+  stamp_project "$target"
+  info ""
+  info "Arrancá el swarm con: ${C_BOLD}swarm-kura run${C_RESET}  (o ./swarm)"
+}
+
+cmd_change() {
+  local project_arg="" args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -C | --project) project_arg="${2:?$1 necesita un directorio}"; shift ;;
+      *) args+=("$1") ;;
+    esac
+    shift
+  done
+  require_project "$project_arg"
+  need_python
+  "$PYTHON" "$ROOT/template/swarmforge/scripts/swarm_python/configure.py" \
+    --project "$PROJECT" --catalog "$ROOT/provider-models.tsv" ${args[@]+"${args[@]}"}
+}
+
+# update_project <dir> <assume-yes>: swarm-init --update with THIS version.
+update_project() {
+  local dir="$1" yes="$2" args=(--update)
+  [ "$yes" = 1 ] && args+=(--yes)
+  info ""
+  info "${C_BOLD}==>${C_RESET} Actualizando el proyecto $dir"
+  run_swarm_init "${args[@]}" "$dir"
+  stamp_project "$dir"
+}
+
+cmd_update() {
+  local check=0 force=0 yes=0 no_project=0 deps=0 version="" branch="" target="" install_args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check) check=1 ;;
+      --force) force=1 ;;
+      -y | --yes) yes=1 ;;
+      --no-project) no_project=1 ;;
+      --deps) deps=1 ;;
+      --version) version="${2:?--version necesita un tag}"; shift ;;
+      --branch) branch="${2:?--branch necesita un nombre}"; shift ;;
+      -*) die "Opción desconocida para update: $1" ;;
+      *) target="$1" ;;
+    esac
+    shift
+  done
+
+  if [ ! -f "$ROOT/INSTALL_INFO" ]; then
+    # Dev mode (running from a clone): there is nothing to download; update
+    # the project from this checkout.
+    warn "swarm-kura corre desde un clon ($ROOT): se actualiza solo el proyecto con este código."
+    [ "$check" = 1 ] && return 0
+    local p
+    p="$(find_project "$target")" || die "No hay proyecto con SwarmForge en ${target:-$PWD}."
+    update_project "$p" "$yes"
+    return
+  fi
+
+  local repo
+  repo="$(config_field repo)"
+  repo="${repo:-$(info_field repo)}"
+  [ -n "$branch" ] || [ -n "$version" ] || branch="$(config_field branch)"
+
+  if [ "$check" = 1 ]; then
+    local latest
+    if [ -n "$branch" ]; then
+      latest="$branch-$(git ls-remote "https://github.com/$repo.git" "refs/heads/$branch" 2>/dev/null | awk '{print substr($1,1,7)}')"
+    else
+      latest="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+        | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+      if [ -z "$latest" ]; then
+        local def sha
+        def="$(info_field branch)"
+        def="${def:-master}"
+        sha="$(git ls-remote "https://github.com/$repo.git" "refs/heads/$def" 2>/dev/null | awk '{print substr($1,1,7)}')"
+        latest="$def-$sha"
+      fi
+    fi
+    if [ "$latest" = "$(kura_version)" ]; then
+      ok "swarm-kura $(kura_version) está al día"
+    else
+      info "Hay una versión nueva: ${C_BOLD}$latest${C_RESET} (instalada: $(kura_version)). Actualizá con: swarm-kura update"
+    fi
+    return 0
+  fi
+
+  install_args=(--update --no-modify-path)
+  [ "$deps" = 1 ] || install_args+=(--no-deps)
+  [ "$force" = 1 ] && install_args+=(--force)
+  [ "$yes" = 1 ] && install_args+=(--yes)
+  [ -n "$version" ] && install_args+=(--version "$version")
+  [ -n "$branch" ] && install_args+=(--branch "$branch")
+
+  # Run the newest installer logic available: fetch install.sh from the repo,
+  # falling back to the copy shipped with this version (offline, API errors).
+  local installer tmp
+  tmp="$(mktemp -d)"
+  installer="$ROOT/install.sh"
+  local raw_ref="${branch:-master}"
+  if curl -fsSL --retry 2 -o "$tmp/install.sh" "https://raw.githubusercontent.com/$repo/$raw_ref/install.sh" 2>/dev/null \
+    && bash -n "$tmp/install.sh" 2>/dev/null; then
+    installer="$tmp/install.sh"
+  fi
+  SWARM_KURA_REPO="$repo" SWARM_KURA_HOME="$KURA_HOME" bash "$installer" "${install_args[@]}" || {
+    rm -rf "$tmp"
+    die "La actualización de swarm-kura falló; la versión $(kura_version) sigue activa."
+  }
+  rm -rf "$tmp"
+
+  [ "$no_project" = 1 ] && return 0
+  local p
+  p="$(find_project "$target")" || {
+    info "${C_DIM}(No estás dentro de un proyecto con SwarmForge: solo se actualizó swarm-kura. Para un proyecto: cd al proyecto && swarm-kura update)${C_RESET}"
+    return 0
+  }
+  local now
+  now="$(tr -d '\r\n' <"$KURA_HOME/current")"
+  if [ "$force" = 0 ] && [ "$(project_version "$p")" = "$now" ]; then
+    ok "el proyecto $p ya está en $now"
+    return 0
+  fi
+  # Hand over to the NEW version so the project gets the new template.
+  local args=(update-project "$p")
+  [ "$yes" = 1 ] && args+=(--yes)
+  exec bash "$KURA_HOME/versions/$now/bin/swarm-kura" "${args[@]}"
+}
+
+cmd_update_project() { # internal: called by `update` on the freshly installed version
+  local dir="" yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in -y | --yes) yes=1 ;; *) dir="$1" ;; esac
+    shift
+  done
+  update_project "${dir:?}" "$yes"
+}
+
+swarm_passthrough() { # swarm_passthrough <dir-or-empty> <swarm args...>
+  local dir="$1"
+  shift
+  require_project "$dir"
+  cd "$PROJECT"
+  [ -x ./swarm ] || die "Falta $PROJECT/swarm. Reparalo con: swarm-kura update --force"
+  exec ./swarm "$@"
+}
+
+cmd_doctor() {
+  local p="" status=0 b py agent
+  info "${C_BOLD}swarm-kura $(kura_version)${C_RESET} · $(host_triple) · $ROOT"
+  info ""
+  info "${C_BOLD}Dependencias${C_RESET}"
+  b=""
+  for cand in /opt/homebrew/bin/bash /usr/local/bin/bash /home/linuxbrew/.linuxbrew/bin/bash $(type -ap bash 2>/dev/null); do
+    [ -x "$cand" ] || continue
+    if "$cand" -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then b="$cand"; break; fi
+  done
+  if [ -n "$b" ]; then ok "bash $("$b" -c 'echo $BASH_VERSION') ($b)"
+  else bad "bash >= 4 no encontrado (macOS: brew install bash)"; status=1; fi
+  if find_python; then ok "python $("$PYTHON" -c 'import platform; print(platform.python_version())') ($(command -v "$PYTHON"))"
+  else bad "Python >= 3.10 no encontrado (macOS: brew install python@3.12)"; status=1; fi
+  for dep in git herdr engram curl; do
+    if have "$dep"; then ok "$dep ($(command -v "$dep"))"; else bad "$dep no está instalado"; status=1; fi
+  done
+  case "$(uname -s)" in
+    Darwin) have caffeinate && ok "caffeinate (evita que el Mac se duerma con el swarm corriendo)" ;;
+  esac
+
+  info ""
+  info "${C_BOLD}Agentes${C_RESET}"
+  for agent in claude codex copilot grok hermes kiro-cli opencode pi; do
+    if have "$agent"; then ok "$agent"; else info "  ${C_DIM}· $agent (no instalado)${C_RESET}"; fi
+  done
+
+  if p="$(find_project "${1:-}")"; then
+    info ""
+    info "${C_BOLD}Proyecto${C_RESET} $p"
+    local pv
+    pv="$(project_version "$p")"
+    if [ -z "$pv" ]; then warn "instalado antes de swarm-kura (sin versión registrada); actualizá con: swarm-kura update --force"
+    elif [ "$pv" != "$(kura_version)" ]; then warn "instalado con $pv; esta versión es $(kura_version) → swarm-kura update"
+    else ok "versión $pv"; fi
+    local used
+    used="$(awk '$1=="window"{print $3}' "$p/swarmforge/swarmforge.conf" | sort -u)"
+    for agent in $used; do
+      if have "$agent"; then ok "agente configurado: $agent"; else bad "agente configurado pero no instalado: $agent"; status=1; fi
+    done
+    if [ -f "$p/.swarmforge/tui/swarm-tui" ] || [ -f "$p/.swarmforge/tui/swarm-tui.exe" ]; then ok "TUI instalada"
+    else bad "falta la TUI (.swarmforge/tui); repará con: swarm-kura update --force"; status=1; fi
+    local tc="$p/.swarmforge/toolchain"
+    if [ -f "$tc/PLATFORM" ]; then
+      if [ "$(tr -d '\r\n' <"$tc/PLATFORM")" = "$(host_triple)" ]; then ok "toolchain Gherkin ($(host_triple))"
+      else bad "toolchain Gherkin de $(tr -d '\r\n' <"$tc/PLATFORM") en un equipo $(host_triple); repará con: swarm-kura update --force"; status=1; fi
+    else
+      warn "sin toolchain Gherkin instalado"
+    fi
+  fi
+  info ""
+  if [ "$status" = 0 ]; then ok "${C_BOLD}todo en orden${C_RESET}"; else warn "hay problemas (ver arriba)"; fi
+  return "$status"
+}
+
+cmd_uninstall() {
+  local bin_dir="${SWARM_KURA_BIN_DIR:-$HOME/.local/bin}" answer=""
+  printf '¿Borrar %s y %s/swarm-kura? Los proyectos no se tocan. [s/N]: ' "$KURA_HOME" "$bin_dir" >&2
+  read -r answer </dev/tty || answer=""
+  case "$answer" in s | S | si | sí | y | yes) ;; *) info "Cancelado."; return 1 ;; esac
+  rm -rf "${KURA_HOME:?}"
+  rm -f "$bin_dir/swarm-kura" "$bin_dir/swarm-kura.cmd"
+  ok "swarm-kura desinstalado (la línea de PATH en tu rc de shell puede quedar; es inofensiva)"
+}
+
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  help | -h | --help) cmd_help ;;
+  version | -v | --version) cmd_version ;;
+  init | install) cmd_init "$@" ;;
+  change | config | configure) cmd_change "$@" ;;
+  update | upgrade) cmd_update "$@" ;;
+  update-project) cmd_update_project "$@" ;;
+  run | start) swarm_passthrough "${1:-}" ;;
+  stop) swarm_passthrough "${1:-}" stop ;;
+  tui) swarm_passthrough "${1:-}" tui ;;
+  plan) swarm_passthrough "" plan "$@" ;;
+  doctor) cmd_doctor "$@" ;;
+  uninstall) cmd_uninstall ;;
+  *) printf 'Comando desconocido: %s\n\n' "$cmd" >&2; cmd_help; exit 2 ;;
+esac

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
-# install_swarm.sh — entry point for installing SwarmForge on a brand-new
-# machine in a single step.
+# install_swarm.sh — installs SwarmForge into a project FROM A CLONE of this
+# repo. For the no-clone install use the one-liner instead:
+#   curl -fsSL https://raw.githubusercontent.com/goncalodjay/swarm-local/master/install.sh | bash
+# and then `swarm-kura init` / `swarm-kura update` (see README).
 #
 # What it does:
 #   1. Detects the host platform (OS + arch).
@@ -74,17 +76,15 @@ err() { printf '\033[31mError:\033[0m %s\n' "$1" >&2; exit 1; }
 # Windows ships python.exe only; python3 may resolve to the Microsoft Store
 # stub ("App execution alias"), which prints an error and exits non-zero.
 # Resolve a real, runnable Python 3 and cache it in $PYTHON.
-find_python() {
-  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
-    PYTHON=python3
-    return 0
+# Same lookup as template/swarmforge/scripts/lib/python.sh (Python >= 3.10;
+# macOS ships 3.9 as /usr/bin/python3).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/template/swarmforge/scripts/lib/python.sh"
+
+# sha256sum is GNU coreutils; macOS before 15 only has shasum.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'
   fi
-  if command -v python >/dev/null 2>&1 && python -c 'import sys' >/dev/null 2>&1; then
-    PYTHON=python
-    return 0
-  fi
-  PYTHON=""
-  return 1
 }
 
 detect_platform() {
@@ -134,7 +134,7 @@ fetch_release_bundle() {
   if curl -fsSL --retry 3 -o "$TMPDIR/$sha_name" "$sha_url"; then
     local want got
     want="$(awk '{print $1}' "$TMPDIR/$sha_name")"
-    got="$(sha256sum "$TMPDIR/$asset_name" | awk '{print $1}')"
+    got="$(sha256_of "$TMPDIR/$asset_name")"
     if [[ "$want" != "$got" ]]; then
       mprintf 'sha256 mismatch (expected %s, got %s)\n' "$want" "$got"
       return 1
@@ -233,7 +233,7 @@ PY
 )"
   if [[ -n "$sha" ]]; then
     local got
-    got="$(sha256sum "$tmpdir/$asset_url" | awk '{print $1}')"
+    got="$(sha256_of "$tmpdir/$asset_url")"
     if [[ "$sha" != "$got" ]]; then
       mprintf 'sha256 mismatch from manifest (expected %s, got %s)\n' "$sha" "$got"
       return 1

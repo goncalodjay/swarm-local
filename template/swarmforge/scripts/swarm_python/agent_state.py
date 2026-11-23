@@ -15,6 +15,8 @@ Per role:
   session_id      backend session identity for that task ("" = none yet);
                   a launch creates it, later launches for the same task
                   resume it
+  backend         agent + CLI args the session was created with; a launch
+                  with a different backend (agent/model changed) starts fresh
   launched_at     epoch seconds of the last launch
   sent_since_launch  the role forwarded a handoff since its last launch
   idle_since      epoch seconds herdr first reported it idle with no
@@ -48,6 +50,7 @@ def blank_role(status: str = "parked") -> dict:
         "status": status,
         "task": "",
         "session_id": "",
+        "backend": "",
         "launched_at": None,
         "sent_since_launch": False,
         "idle_since": None,
@@ -65,7 +68,7 @@ def blank_role(status: str = "parked") -> dict:
 
 # Carried over when the swarm restarts, so a restart mid-feature resumes the
 # roles' sessions instead of starting them over.
-KEPT_ACROSS_RESTARTS = ("task", "session_id")
+KEPT_ACROSS_RESTARTS = ("task", "session_id", "backend")
 
 
 def initial_state(roles: list[str], previous: dict | None = None) -> dict:

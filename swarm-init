@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This script needs bash >= 4 (associative arrays, mapfile, ${var,,}). macOS
+# ships bash 3.2 as /bin/bash, so under an old bash re-exec with a newer one
+# (Homebrew's, or any bash >= 4 on PATH). Kept bash-3.2 compatible.
+if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  for swarm_bash in ${SWARMFORGE_BASH:+"$SWARMFORGE_BASH"} /opt/homebrew/bin/bash /usr/local/bin/bash \
+    /home/linuxbrew/.linuxbrew/bin/bash $(type -ap bash 2>/dev/null); do
+    [ -x "$swarm_bash" ] || continue
+    if "$swarm_bash" -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then
+      exec "$swarm_bash" "$0" "$@"
+    fi
+  done
+  echo "swarm-init necesita bash >= 4 (este es bash ${BASH_VERSION:-desconocido})." >&2
+  case "$(uname -s)" in
+    Darwin) echo "En macOS: brew install bash   (o vuelve a correr el instalador de swarm-kura)." >&2 ;;
+    *) echo "Instala un bash más nuevo con el gestor de paquetes del sistema." >&2 ;;
+  esac
+  exit 1
+fi
+
 usage() {
   cat <<'EOF'
 Usage: swarm-init [--languages "Go, Python"] [project-directory]
@@ -132,15 +151,18 @@ header() {
 # Windows ships python.exe only; python3 may resolve to the Microsoft Store
 # stub ("App execution alias"), which prints an error and exits non-zero.
 # Resolve a real, runnable Python 3 and cache it in $PYTHON.
+# macOS ships /usr/bin/python3 3.9, too old for the swarm: require >= 3.10.
+# Same lookup as template/swarmforge/scripts/lib/python.sh.
 find_python() {
-  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
-    PYTHON=python3
-    return 0
-  fi
-  if command -v python >/dev/null 2>&1 && python -c 'import sys' >/dev/null 2>&1; then
-    PYTHON=python
-    return 0
-  fi
+  local candidate
+  for candidate in ${SWARMFORGE_PYTHON:+"$SWARMFORGE_PYTHON"} python3 python3.14 python3.13 python3.12 python3.11 python3.10 \
+    /opt/homebrew/bin/python3 /usr/local/bin/python3 python; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+      PYTHON="$candidate"
+      return 0
+    fi
+  done
   PYTHON=""
   return 1
 }
@@ -258,13 +280,7 @@ _hermes_probe_prepare() {
   [[ -n "$HERMES_PROBE_DIR" ]] && return 0
   local probe="$TEMPLATE_DIR/swarmforge/scripts/swarm_python/hermes_probe.py"
   local py=""
-  # Windows only ships python.exe; python3 may resolve to the Microsoft Store
-  # stub, which prints an error and exits non-zero.
-  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
-    py="python3"
-  elif command -v python >/dev/null 2>&1 && python -c 'import sys' >/dev/null 2>&1; then
-    py="python"
-  fi
+  find_python && py="$PYTHON"
   HERMES_PROBE_DIR="$(mktemp -d)"
   if [[ -z "$py" || ! -f "$probe" ]]; then
     mprintf 'No se pudo consultar Hermes (falta python3 o el probe); se usa el catálogo estático.\n'
@@ -338,11 +354,7 @@ _agent_probe_prepare() {
   AGENT_PROBE_DONE[$agent]=1
   local probe="$TEMPLATE_DIR/swarmforge/scripts/swarm_python/agent_probe.py"
   local py=""
-  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
-    py="python3"
-  elif command -v python >/dev/null 2>&1 && python -c 'import sys' >/dev/null 2>&1; then
-    py="python"
-  fi
+  find_python && py="$PYTHON"
   [[ -n "$AGENT_PROBE_DIR" ]] || AGENT_PROBE_DIR="$(mktemp -d)"
   if [[ -z "$py" || ! -f "$probe" ]]; then
     mprintf 'No se pudo consultar %s (falta python3 o el probe); se usa el catálogo estático.\n' "$agent"

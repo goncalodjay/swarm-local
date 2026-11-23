@@ -826,7 +826,9 @@ class SessionPlanTest(unittest.TestCase):
 class LaunchCommandTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
+        # resolve(): on macOS the temp dir is /var/... -> /private/var/...,
+        # and build_context resolves the project root.
+        root = Path(self.tmp.name).resolve()
         (root / ".swarmforge" / "prompts").mkdir(parents=True)
         self.ctx = build_context(root, SCRIPTS)
         self.root = root
@@ -1000,6 +1002,16 @@ class LaunchCommandTest(unittest.TestCase):
             self.assertIn("agent-exit role=coder exit_code=", cmd)
             self.assertEqual(cmd.count("exit_code=$?"), 1)
             self.assertTrue(cmd.endswith("; exit $exit_code"))
+
+    def test_launch_script_is_valid_bash_for_every_role(self):
+        # The script runs under whatever `bash` is on PATH, including the
+        # bash 3.2 macOS ships: it must parse (no zsh `&!`) for every role.
+        bash = self.bash or "bash"
+        for index in (0, 1):
+            cmd = self.claude_cmd(index)
+            self.assertNotIn("&!", cmd)
+            result = subprocess.run([bash, "-n", "-c", cmd], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def claude_cmd(self, index):
         row = RoleRow(role="coder", agent="claude", session="swarmforge-coder", display_name="Coder",

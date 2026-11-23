@@ -44,7 +44,7 @@ from .env import env_long
 from .handoff.format import header_field
 from .handoff.inbox import batch_dirs, handoff_files
 from .handoff.validate import REPLY_REQUIRED_ROLES
-from .sessions import find_kiro_session, plan_session
+from .sessions import backend_fingerprint, find_kiro_session, plan_session
 
 PARK_GRACE_S = env_long("SWARMFORGE_PARK_GRACE_MS", 15000) / 1000
 # Right after a launch the pane still shows its shell until the wrapper
@@ -397,7 +397,8 @@ class Scheduler:
         if not self._pane_ready_for_launch(row, st, now):
             return
         task = next_task(row.worktree_path, st["task"])
-        plan = plan_session(row.agent, row.role, task, st)
+        backend = backend_fingerprint(row.agent, row.extra_args)
+        plan = plan_session(row.agent, row.role, task, st, backend)
         if row.agent == "kiro-cli" and plan and not plan.resume and st["task"] == task and task:
             self.log("kiro-resume-fallback", row.role, f"task={task}",
                      "no recorded session id for this feature; starting fresh")
@@ -410,6 +411,7 @@ class Scheduler:
             status="running",
             task=task,
             session_id=plan.session_id if plan else "",
+            backend=backend,
             launched_at=now,
             sent_since_launch=False,
             idle_since=None,

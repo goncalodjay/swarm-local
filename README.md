@@ -2,68 +2,75 @@
 
 Plantilla local y autónoma para iniciar SwarmForge en otros proyectos con agentes Pi u OpenCode. No descarga `swarm-forge` ni consulta GitHub al ejecutar `swarm-init` o `./swarm`.
 
+## Instalación (sin clonar el repo)
+
+Igual que Claude Code, opencode o Hermes: un comando instala el CLI `swarm-kura` y otro lo actualiza.
+
+```sh
+# macOS / Linux / Git Bash
+curl -fsSL https://raw.githubusercontent.com/goncalodjay/swarm-local/master/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/goncalodjay/swarm-local/master/install.ps1 | iex
+```
+
+El instalador:
+
+1. Detecta el sistema y la arquitectura (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `windows-x64`; bajo Rosetta instala la build nativa arm64).
+2. Revisa las dependencias y ofrece instalar las que faltan con el gestor del sistema: Homebrew en macOS, `apt`/`dnf`/`pacman`/`zypper`/`apk` en Linux, `winget` en Windows. Pregunta antes (`--yes` para no preguntar, `--no-deps` para saltear).
+3. Descarga el bundle de la última GitHub Release para tu plataforma (`swarm-kura-<os>-<arch>.tar.gz`: TUI precompilada + toolchain Gherkin), verifica su sha256 y lo deja en `~/.swarm-kura/versions/<versión>`. Si todavía no hay releases publicadas, instala la rama principal y compila la TUI una vez con Bun (lo instala solo si hace falta).
+4. Activa esa versión (`~/.swarm-kura/current`), crea `~/.local/bin/swarm-kura` y lo agrega al `PATH` de tu shell (zsh, bash o fish). Se conservan las últimas 3 versiones.
+
+Opciones: `--version vX.Y.Z` (una release concreta), `--branch <rama>` (canal de desarrollo; `update` lo recuerda), `--yes`, `--no-deps`, `--no-modify-path`, `--from <dir>` (instalar desde un checkout local). Variables: `SWARM_KURA_REPO`, `SWARM_KURA_HOME`, `SWARM_KURA_BIN_DIR`, `GITHUB_TOKEN`.
+
+### Comandos
+
+| Comando | Qué hace |
+| --- | --- |
+| `swarm-kura init [dir] [-l "Go, SQL"]` | Instala el swarm en el proyecto (wizard de lenguajes, agentes, modelos y thinking). |
+| `swarm-kura update` | Baja la última versión de swarm-kura y, si estás dentro de un proyecto, lo actualiza también (`swarm-init --update`: scripts, prompts, TUI, toolchain; tu `swarmforge.conf` se conserva). `--check` solo avisa, `--no-project` solo actualiza el CLI, `--force` reinstala, `-y` sin confirmaciones. |
+| `swarm-kura change` | Cambia el agente, el modelo o el thinking de uno o más roles sin repetir la instalación (ver abajo). |
+| `swarm-kura run` · `stop` · `tui` · `plan ...` | Atajos a `./swarm`, `./swarm stop`, `./swarm tui`, `./swarm plan` del proyecto (buscan el proyecto hacia arriba desde el directorio actual). |
+| `swarm-kura doctor` | Revisa bash ≥ 4, Python ≥ 3.10, git, herdr, engram, los agentes instalados y el estado del proyecto (versión, TUI, toolchain de la plataforma correcta). |
+| `swarm-kura version` · `uninstall` | Versión/canal instalado · desinstala (no toca los proyectos). |
+
+### Cambiar agentes o modelos: `swarm-kura change`
+
+Interactivo: muestra la tabla de roles, elegís uno o varios (`2`, `1,3`, `a` = todos) y para cada uno si cambiás **solo el modelo**, **el agente (y su modelo)** o **solo el thinking**. Los modelos salen del mismo descubrimiento en vivo que usa `swarm-init` (con el catálogo estático como respaldo y "Otro" para cualquier id). Muestra el diff, pide confirmación y guarda; el archivo anterior queda como `swarmforge.conf.bak.<fecha>`.
+
+Sin preguntas, para los casos típicos:
+
+```sh
+swarm-kura change architect --model opencode-go/kimi-k3          # minimax no anda hoy: solo ese rol
+swarm-kura change --from-agent claude --agent codex --model gpt-5.6-luna   # sin créditos en Claude
+swarm-kura change --all --thinking high
+swarm-kura change --list
+```
+
+Se conservan el worktree, el modo `batch`, la auto-aprobación (se traduce al flag del agente nuevo) y los argumentos extra propios (si el agente no cambia). Un rol con agente o modelo distinto arranca una **sesión nueva** en su próximo lanzamiento: el scheduler guarda con qué backend creó cada sesión y no reanuda una sesión de otro agente/modelo. Si el swarm está corriendo, el cambio se aplica al reiniciarlo (`swarm-kura stop && swarm-kura run`).
+
 ## Requisitos
 
-Instalá estas herramientas en el dispositivo destino **antes** de clonar el repo.
+| Herramienta | Versión mínima | Notas |
+| --- | --- | --- |
+| `bash` | 4.0 | macOS trae bash 3.2 en `/bin/bash`: el instalador instala uno nuevo con `brew install bash`. `swarm-init` se re-ejecuta solo con el bash ≥ 4 que encuentre. `install.sh` y `swarm-kura` funcionan con 3.2. |
+| `python3` | 3.10 | macOS trae 3.9 en `/usr/bin/python3`: el instalador ofrece `brew install python@3.12`. Los scripts buscan `python3.1x`/Homebrew antes de rendirse; `SWARMFORGE_PYTHON` fuerza uno. |
+| `herdr` | última estable | `brew install herdr` o `curl -fsSL https://herdr.dev/install.sh \| sh` (Windows: `irm https://herdr.dev/install.ps1 \| iex`). |
+| `engram` | última estable | `brew install gentleman-programming/tap/engram` o ver [instalación de Engram](https://github.com/Gentleman-Programming/engram/blob/main/docs/INSTALLATION.md). |
+| `git`, `curl`, `tar` | — | preinstalados casi siempre. |
+| CLIs de agentes | — | `opencode`, `codex`, `claude`, `copilot`, `grok`, `hermes`, `kiro-cli`, `pi`: solo los que uses. |
 
-| Herramienta | Versión mínima | Para qué se usa | Notas |
-| --- | --- | --- | --- |
-| `bash` | 5.0 | `swarm-init`, `install_swarm.sh`, `./swarm`, todos los `.sh` | viene con macOS / WSL / la mayoría de Linux |
-| `python3` | 3.10 | backend de SwarmForge (`swarmforge/scripts/swarm_python/*.py`) | en WSL/Ubuntu: `sudo apt install python3`; en macOS: `brew install python@3.12` |
-| `herdr` | última estable | multiplexor de terminal por agente y superficie de la TUI; reemplaza a tmux | `curl -fsSL https://herdr.dev/install.sh \| sh` (Linux/macOS) o `powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 \| iex"` (Windows); `brew install herdr`; `./swarm` no arranca sin él |
-| `git` | 2.30 | worktrees del swarm, `swarm_handoff` | preinstalado en todas las distros |
-| `engram` | última estable | memoria compartida entre los cuatro roles (ver [Memoria compartida](#memoria-compartida-engram)) | `brew install gentleman-programming/tap/engram` o ver [instalación de Engram](https://github.com/Gentleman-Programming/engram/blob/main/docs/INSTALLATION.md); `./swarm` no arranca sin él |
-| `curl` | 7.x | descarga del binario de la TUI desde GitHub Releases | `sudo apt install curl` |
-| `tar` | cualquier | extracción del bundle si la release viene como `.tar.gz` | preinstalado |
-| `opencode`, `codex`, `claude`, `copilot`, `grok`, `hermes`, `kiro-cli`, `pi` | las que publique cada vendor | CLIs de los agentes que elijas para cada rol | instalá solo las que vas a usar; el wizard de `swarm-init` las valida |
-| `bun` | 1.4 | solo para compilar la TUI desde fuente | obligatorio **en la máquina donde compilás**, **no** en la destino |
-| `node` + `npm` | node 20.x o 22.x, npm 10.x | compilar la TUI desde fuente (cuando no hay binario pre-construido) | mismo caso: solo en la máquina de build |
+Bun/Node solo hacen falta para compilar la TUI cuando no hay binario publicado; el instalador se encarga.
 
-Resumen rápido:
+## Desde un clon (desarrollo)
 
-- **En cada máquina destino** (donde corrés `./swarm`, incluida Windows): `bash`, `python3 >= 3.10`, `herdr`, `git`, `engram`, `curl`, `tar`, y los CLIs de los agentes que vayas a usar.
-- **En la máquina de build** (donde compilas la TUI una vez): además de lo anterior, `node >= 20` y `bun >= 1.4`. Si solo vas a usar binarios pre-construidos de las GitHub Releases, no necesitás esta máquina.
-
-Verificación rápida en una sola línea:
-
-```sh
-for t in bash python3 herdr git engram curl tar; do command -v "$t" >/dev/null && echo "OK $t" || echo "MISSING $t"; done
-```
-
-## Instalación local
-
-```sh
-mkdir -p ~/.local/bin
-ln -sf ~/projects/swarm-local/swarm-init ~/.local/bin/swarm-init
-```
-
-Asegúrate de que `~/.local/bin` esté en `PATH`.
-
-## Instalar SwarmForge en otra máquina
-
-Cloná el repo y corré el instalador:
-
-```sh
-git clone <url-del-repo> ~/swarm-local
-cd ~/swarm-local
-./install_swarm.sh /ruta/al/proyecto
-```
-
-`install_swarm.sh` hace:
-
-1. Detecta SO y arquitectura (linux-x64, darwin-arm64, …).
-2. Descarga el binario de la TUI correspondiente desde GitHub Releases (`swarm-tui-<os>-<arch>.bin` + `.sha256`) y lo verifica.
-3. Si no hay binario publicado para esa plataforma, compila la TUI localmente (necesita `node` y `bun`).
-4. Ejecuta `./swarm-init <target>` que copia la plantilla y deja el proyecto listo (o `./swarm-init --update <target>` si ya hay una instalación; ver más abajo).
-
-Variables opcionales:
-
-- `SWARM_RELEASE_REPO=owner/swarm-local` (default: `nousresearch/swarm-local`).
-- `SWARM_RELEASE_TAG=v1.2.3` o `latest` (default: `latest`).
+`./install_swarm.sh /ruta/al/proyecto` sigue funcionando desde un clon del repo (instala o, si ya hay instalación, actualiza con `swarm-init --update`). También podés usar el CLI desde el clon: `bin/swarm-kura ...`, o instalar el checkout con `./install.sh --from .`.
 
 ## Actualizar una instalación existente
 
-Volver a ejecutar `./install_swarm.sh /ruta/al/proyecto` (o `swarm-init --update /ruta/al/proyecto`) sobre un proyecto que ya tiene SwarmForge **actualiza** la instalación; no hace falta borrar nada.
+`swarm-kura update` (o `swarm-init --update /ruta/al/proyecto` desde un clon) **actualiza** la instalación; no hace falta borrar nada.
 
 **Se reemplaza** todo lo que es de la plantilla: `swarmforge/scripts/`, los prompts de rol que trae la plantilla (`swarmforge/roles/*.prompt`), `swarmforge/constitution.prompt` y `swarmforge/constitution/`, `swarm`, `swarm.cmd`, `.swarmforge/toolchain` y el binario del TUI. Se agregan `.swarmforge/` y `.worktrees/` a `.gitignore` si faltan (nunca se quita nada). Los lenguajes se leen de `project.prompt` o de `--languages`.
 
@@ -73,16 +80,16 @@ Volver a ejecutar `./install_swarm.sh /ruta/al/proyecto` (o `swarm-init --update
 
 - `N` o Enter: cancela con código distinto de 0 y no modifica nada.
 - `s`: detiene el swarm, copia los archivos en riesgo a `.swarmforge/backup-<fecha-hora>/` y actualiza. Nunca se borra un worktree ni una rama con cambios sin commit; para los roles obsoletos con worktree limpio se ofrece eliminarlo, y si no, se imprimen los comandos `git worktree remove` / `git branch -d`.
-- Sin terminal (CI, pipes) la actualización se cancela salvo que pases `--yes` (`./install_swarm.sh --yes /ruta/al/proyecto`). Si la plantilla agregó roles nuevos y no hay terminal para elegir su agente, también se cancela.
+- Sin terminal (CI, pipes) la actualización se cancela salvo que pases `--yes`. Si la plantilla agregó roles nuevos y no hay terminal para elegir su agente, también se cancela.
 
-El estado vivo (`.swarmforge/handoffs`, logs, notify, sesiones y `agents.json` de los roles vigentes) se conserva, de modo que `./swarm` retoma las sesiones. Al terminar se imprime un resumen de lo reemplazado, lo conservado, las copias de seguridad y el siguiente paso.
+El estado vivo (`.swarmforge/handoffs`, logs, notify, sesiones y `agents.json` de los roles vigentes) se conserva, de modo que `./swarm` retoma las sesiones. `.swarmforge/kura-version` registra con qué versión de swarm-kura se instaló o actualizó el proyecto (`swarm-kura update` lo usa para saber si el proyecto quedó atrás).
 
 ## Uso
 
 Desde la raíz de un proyecto:
 
 ```sh
-./install_swarm.sh .          # o: ./swarm-init
+swarm-kura init               # o, desde un clon: ./install_swarm.sh .
 # responde los lenguajes, la auto-aprobación de permisos y, para cada rol, backend, modelo y thinking/effort
 ./swarm
 ```
@@ -301,7 +308,7 @@ Comandos (se ejecutan desde la raíz del proyecto o desde cualquier worktree; el
 
 La plantilla trae las herramientas (`gherkin-parser`, `gherkin-mutator`, `gherkin-ir-dry-checker`) en `template/toolchain/<os>-<arch>/bin/`, donde `<os>` es `linux`, `darwin` o `windows` y `<arch>` es `x64` o `arm64`. `swarm-init` (instalación y `--update`) detecta la plataforma del equipo, copia **solo** el build que corresponde a `.swarmforge/toolchain/bin` y anota el resultado en `.swarmforge/toolchain/PLATFORM`. Si mueves el proyecto a otro SO, `swarm-init --update` reinstala el build correcto.
 
-Builds precompilados incluidos: `linux-x64` y `windows-x64` (en Windows son `.exe`; Git Bash los resuelve por el nombre sin extensión). Para cualquier otra plataforma (`darwin-x64`, `darwin-arm64`, `linux-arm64`, `windows-arm64`) `swarm-init` compila las herramientas desde `vendor/acceptance-pipeline-specification` con `scripts/build_toolchain.sh`, siempre que Go esté en el `PATH`. Sin Go (o si faltan `scripts/build_toolchain.sh` o `vendor/`, que deben estar junto a `swarm-init`) avisa qué falta y cómo arreglarlo y sigue la instalación sin fallar: **si ya había un toolchain instalado se conserva tal cual** (nunca se reemplaza por uno vacío ni incompleto) y `PLATFORM` solo se escribe tras una instalación correcta. Antes de reemplazar, `swarm-init --update` copia el toolchain anterior (`bin/` y `PLATFORM`) a `.swarmforge/backup-<fecha>/.swarmforge/toolchain`. A mano: `scripts/build_toolchain.sh <triple> [carpeta-bin]`, por ejemplo `scripts/build_toolchain.sh darwin-arm64 .swarmforge/toolchain/bin`.
+Builds precompilados incluidos: `linux-x64`, `linux-arm64`, `darwin-arm64`, `darwin-x64` y `windows-x64` (en Windows son `.exe`; Git Bash los resuelve por el nombre sin extensión). Para cualquier otra plataforma (`windows-arm64`) `swarm-init` compila las herramientas desde `vendor/acceptance-pipeline-specification` con `scripts/build_toolchain.sh`, siempre que Go esté en el `PATH`. Sin Go (o si faltan `scripts/build_toolchain.sh` o `vendor/`, que deben estar junto a `swarm-init`) avisa qué falta y cómo arreglarlo y sigue la instalación sin fallar: **si ya había un toolchain instalado se conserva tal cual** (nunca se reemplaza por uno vacío ni incompleto) y `PLATFORM` solo se escribe tras una instalación correcta. Antes de reemplazar, `swarm-init --update` copia el toolchain anterior (`bin/` y `PLATFORM`) a `.swarmforge/backup-<fecha>/.swarmforge/toolchain`. A mano: `scripts/build_toolchain.sh <triple> [carpeta-bin]`, por ejemplo `scripts/build_toolchain.sh darwin-arm64 .swarmforge/toolchain/bin`.
 
 Al arrancar, `./swarm` **ejecuta** cada herramienta (`--version`, con timeout corto y sin shell) y la clasifica como `ok`, `missing` o `wrong-platform`/`not-executable`. Si alguna no sirve, avisa con el SO/arquitectura detectados, indica cómo arreglarlo (`swarm-init --update` o `scripts/build_toolchain.sh <triple>`, y si `PLATFORM` no coincide con el equipo, lo menciona) y deja el detalle en `.swarmforge/toolchain-check.txt`; no es fatal (los proyectos sin Gherkin no la necesitan). El specifier lee ese archivo y, si hay herramientas inutilizables, no genera `.feature` y lo deja dicho en `general.md`.
 

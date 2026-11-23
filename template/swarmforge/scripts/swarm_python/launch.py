@@ -254,27 +254,36 @@ def build_launch_command(ctx, index: int, row: RoleRow, session: SessionPlan | N
 
     # Record how and when the agent ended: the daemon only sees "the pane is
     # back at its shell", so without this a crash leaves no reason behind.
-    # Shell builtins only. exit_code keeps the agent's status, and the script
-    # always ends with it so the pane sees the agent's real exit status.
+    # exit_code keeps the agent's status, and the script always ends with it
+    # so the pane sees the agent's real exit status. The timestamp uses the
+    # printf builtin (bash >= 4.2) and falls back to `date` on bash 3.2, the
+    # /bin/bash macOS ships, where `%(...)T` is an invalid format.
     log_dir = ctx.state_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     agent_log = shell_quote(str(log_dir / f"{role}-agent.log"))
     command += (
         "; exit_code=$?; "
-        f"printf '%(%Y-%m-%dT%H:%M:%S%z)T agent-exit role={role} exit_code=%s\\n' -1 \"$exit_code\" "
+        "printf -v swarm_ts '%(%Y-%m-%dT%H:%M:%S%z)T' -1 2>/dev/null "
+        "|| swarm_ts=$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null); "
+        f"printf '%s agent-exit role={role} exit_code=%s\\n' \"$swarm_ts\" \"$exit_code\" "
         f">> {agent_log} 2>/dev/null"
     )
 
     if index == 0:
         cleanup_parts = [
             ";",
+            "{",
             "nohup",
             shell_quote(str(ctx.script_dir / "swarm-cleanup.sh")),
             shell_quote(ctx.herdr_session),
             shell_quote(str(ctx.working_dir)),
         ]
         cleanup_parts.extend(shell_quote(r.workspace_id) for r in ctx.roles)
-        cleanup_parts.extend([">/dev/null", "2>&1", "&!"])
+        # `&!` is zsh-only (background + disown) and a bare `& ;` is invalid
+        # too: in bash both are syntax errors that kept the whole first-role
+        # launch script from running. A `{ ... & }` group is valid in every
+        # bash; nohup shields the cleanup from the pane's SIGHUP.
+        cleanup_parts.extend([">/dev/null", "2>&1", "&", "}"])
         command += " " + " ".join(cleanup_parts)
 
     command += "; exit $exit_code"
