@@ -1,4 +1,10 @@
-name: Release TUI binaries
+name: Release
+
+# Push a tag vX.Y.Z (matching VERSION) to publish a release. Assets:
+#   swarm-kura-<os>-<arch>.tar.gz (+ .sha256)  what install.sh / `swarm-kura update` install:
+#       the repo's runtime files + tui/dist/swarm-tui[.exe] + template/toolchain/<os>-<arch>
+#   swarm-tui-<os>-<arch>.bin (+ .sha256)      the bare TUI binary (install_swarm.sh, branch installs)
+#   manifest.json, VERSION
 
 on:
   push:
@@ -9,112 +15,118 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: build ${{ matrix.label }}
+  toolchain:
+    name: gherkin toolchain (all platforms)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Cross-compile every triple
+        run: bash scripts/build_toolchain.sh --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolchain
+          path: template/toolchain
+          if-no-files-found: error
+
+  tui:
+    name: tui ${{ matrix.triple }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            label: linux-x64
-            artifact: swarm-tui-linux-x64.bin
-          - os: ubuntu-22.04-arm
-            label: linux-arm64
-            artifact: swarm-tui-linux-arm64.bin
-          - os: macos-latest
-            label: darwin-arm64
-            artifact: swarm-tui-darwin-arm64.bin
-          - os: macos-13
-            label: darwin-x64
-            artifact: swarm-tui-darwin-x64.bin
-          - os: windows-latest
-            label: windows-x64
-            artifact: swarm-tui-windows-x64.bin
-
+          - { os: ubuntu-latest, triple: linux-x64 }
+          - { os: ubuntu-24.04-arm, triple: linux-arm64 }
+          - { os: macos-latest, triple: darwin-arm64 }
+          - { os: macos-15-intel, triple: darwin-x64 }
+          - { os: windows-latest, triple: windows-x64 }
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4'
-
-      - name: Install deps
-        working-directory: tui
-        run: bun install --frozen-lockfile
-
       - name: Build TUI
         working-directory: tui
-        run: bun run build
-
-      - name: Stage binary as <artifact>
         shell: bash
         run: |
-          mkdir -p release
-          if [[ "${{ matrix.os }}" == windows-* ]]; then
-            cp tui/dist/swarm-tui.exe "release/${{ matrix.artifact }}"
+          bun install
+          bun run build
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p out
+          if [[ -f tui/dist/swarm-tui.exe ]]; then
+            cp tui/dist/swarm-tui.exe "out/swarm-tui-${{ matrix.triple }}.bin"
           else
-            cp tui/dist/swarm-tui "release/${{ matrix.artifact }}"
+            cp tui/dist/swarm-tui "out/swarm-tui-${{ matrix.triple }}.bin"
           fi
-
-      - name: sha256
-        shell: bash
-        working-directory: release
-        run: |
-          sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.label }}
-          path: release/${{ matrix.artifact }}
+          name: tui-${{ matrix.triple }}
+          path: out/swarm-tui-${{ matrix.triple }}.bin
           if-no-files-found: error
 
   publish:
-    name: publish release
-    needs: build
+    name: bundle + release
+    needs: [toolchain, tui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-
-      - name: Compute sha256 for every binary
-        working-directory: dist
+      - name: Tag must match VERSION
         run: |
-          for f in *; do
-            [[ "$f" == *.sha256 ]] && continue
+          v="$(tr -d '[:space:]' < VERSION)"
+          if [[ "v$v" != "$GITHUB_REF_NAME" ]]; then
+            echo "VERSION is $v but the tag is $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble per-platform bundles
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git archive --format=tar HEAD | (mkdir -p base && tar -x -C base)
+          rm -rf base/tests base/features base/acceptance base/docs/_archive base/.github \
+                 base/tui/src base/tui/test base/template/toolchain
+          for triple in linux-x64 linux-arm64 darwin-arm64 darwin-x64 windows-x64; do
+            bin="artifacts/tui-$triple/swarm-tui-$triple.bin"
+            [[ -f "$bin" ]] || { echo "missing TUI for $triple" >&2; exit 1; }
+            stage="stage/$triple"
+            rm -rf "$stage"; mkdir -p "$stage"
+            cp -R base/. "$stage/"
+            mkdir -p "$stage/tui/dist" "$stage/template/toolchain"
+            exe=""; [[ "$triple" == windows-* ]] && exe=".exe"
+            install -m 0755 "$bin" "$stage/tui/dist/swarm-tui$exe"
+            cp -R "artifacts/toolchain/$triple" "$stage/template/toolchain/$triple"
+            chmod +x "$stage"/template/toolchain/"$triple"/bin/* "$stage/swarm-init" "$stage/bin/swarm-kura" "$stage/install.sh"
+            tar -C "$stage" -czf "dist/swarm-kura-$triple.tar.gz" .
+            cp "$bin" "dist/swarm-tui-$triple.bin"
+          done
+          cp VERSION dist/VERSION
+          cd dist
+          for f in swarm-kura-*.tar.gz swarm-tui-*.bin; do
             sha256sum "$f" > "$f.sha256"
           done
-
-      - name: Read VERSION (from repo root)
-        id: version
-        run: |
-          if [[ -f VERSION ]]; then
-            v=$(tr -d '[:space:]' < VERSION)
-          else
-            v=${GITHUB_REF_NAME#v}
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Build manifest.json
         working-directory: dist
         run: |
           python3 - <<'PY'
           import hashlib, json, pathlib
-          out = {"version": "${{ steps.version.outputs.version }}", "binaries": []}
-          for f in sorted(pathlib.Path('.').glob('*')):
-              if f.suffix == '.sha256' or f.name == 'manifest.json':
+          out = {"version": pathlib.Path("VERSION").read_text().strip(), "bundles": [], "binaries": []}
+          for f in sorted(pathlib.Path(".").iterdir()):
+              if f.suffix == ".sha256" or f.name in ("manifest.json", "VERSION"):
                   continue
-              sha = hashlib.sha256(f.read_bytes()).hexdigest()
-              out["binaries"].append({
-                  "name": f.name,
-                  "sha256": sha,
-              })
-          pathlib.Path('manifest.json').write_text(json.dumps(out, indent=2))
+              entry = {"name": f.name, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
+              out["bundles" if f.name.startswith("swarm-kura-") else "binaries"].append(entry)
+          pathlib.Path("manifest.json").write_text(json.dumps(out, indent=2))
           PY
           cat manifest.json
 
@@ -124,5 +136,4 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: |
-            dist/*
+          files: dist/*

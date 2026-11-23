@@ -58,12 +58,25 @@ def new_session_id(agent: str, role: str, task: str) -> str:
     return str(uuid.uuid4())
 
 
-def plan_session(agent: str, role: str, task: str, role_state: dict) -> SessionPlan | None:
+def backend_fingerprint(agent: str, extra_args: str | None) -> str:
+    """Identity of the backend a session was created with (agent + its CLI
+    arguments: model, provider, effort...). A session is only resumed with the
+    same backend: after `swarm-kura change` swaps the agent or model of a
+    role, the old id belongs to another CLI (or, for hermes, to a frozen
+    route), so the next launch must start fresh with the full prompt."""
+    return " ".join([agent, *(extra_args or "").split()])
+
+
+def plan_session(agent: str, role: str, task: str, role_state: dict,
+                 backend: str | None = None) -> SessionPlan | None:
     """Decide whether the next launch of a role resumes its session for this
     feature or starts a new one. Returns None for backends without resume
     support, which always start fresh."""
     if not supports_resume(agent):
         return None
+    recorded = role_state.get("backend") or ""
+    if backend is not None and recorded and recorded != backend:
+        return SessionPlan(new_session_id(agent, role, task), resume=False)
     # For kiro-cli session_id is only ever a real, recorded kiro id (or ""),
     # so the same check below never resumes anything it did not create.
     if role_state.get("session_id") and role_state.get("task") == task:
